@@ -69,4 +69,8 @@ public class Order {
     public BigDecimal getTotalAmount() {
         return totalAmount;
     }
+
+    public List<OrderItem> getItems() {
+        return List.copyOf(items);
+    }
 }
