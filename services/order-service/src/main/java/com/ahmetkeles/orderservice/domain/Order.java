@@ -74,6 +74,26 @@ public class Order {
         return id;
     }
 
+    public UUID getCustomerId() {
+        return customerId;
+    }
+
+    public OrderStatus getStatus() {
+        return status;
+    }
+
+    public String getCurrency() {
+        return currency;
+    }
+
+    public Instant getCreatedAt() {
+        return createdAt;
+    }
+
+    public Instant getUpdatedAt() {
+        return updatedAt;
+    }
+
     public List<OrderItem> getItems() {
         return List.copyOf(items);
     }
