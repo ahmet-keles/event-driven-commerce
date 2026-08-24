@@ -7,6 +7,7 @@ import com.ahmetkeles.orderservice.service.OrderService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.jdbc.core.JdbcTemplate;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
@@ -16,6 +17,7 @@ import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 class OrderOutboxIntegrationTest extends PostgreSQLIntegrationTest {
 
@@ -30,6 +32,9 @@ class OrderOutboxIntegrationTest extends PostgreSQLIntegrationTest {
 
     @Autowired
     private ObjectMapper objectMapper;
+
+    @Autowired
+    private JdbcTemplate jdbcTemplate;
 
     @BeforeEach
     void clearDatabase() {
@@ -96,5 +101,28 @@ class OrderOutboxIntegrationTest extends PostgreSQLIntegrationTest {
         assertEquals(2, payload.get("quantity").asInt());
         assertEquals("15.0", payload.get("unitPrice").asText());
         assertEquals("30.0", payload.get("totalAmount").asText());
+    }
+
+    @Test
+    void orderCreationRollsBackWhenOutboxWriteFails() {
+        jdbcTemplate.execute(
+                "ALTER TABLE outbox_events " +
+                "ADD CONSTRAINT reject_outbox_events CHECK (false)"
+        );
+
+        try {
+            assertThrows(
+                    RuntimeException.class,
+                    () -> orderService.createOrder(UUID.randomUUID(), "USD")
+            );
+
+            assertEquals(0, orderRepository.count());
+            assertEquals(0, outboxEventRepository.count());
+        } finally {
+            jdbcTemplate.execute(
+                    "ALTER TABLE outbox_events " +
+                    "DROP CONSTRAINT IF EXISTS reject_outbox_events"
+            );
+        }
     }
 }
