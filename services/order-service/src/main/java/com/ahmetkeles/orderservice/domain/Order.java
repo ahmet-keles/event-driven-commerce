@@ -57,4 +57,12 @@ public class Order {
         this.createdAt = Instant.now();
         this.updatedAt = Instant.now();
     }
+
+    public void addItem(UUID productId, int quantity, BigDecimal unitPrice) {
+        OrderItem item = new OrderItem(productId, quantity, unitPrice, this);
+
+        items.add(item);
+        totalAmount = totalAmount.add(item.subtotal());
+        updatedAt = Instant.now();
+    }
 }
