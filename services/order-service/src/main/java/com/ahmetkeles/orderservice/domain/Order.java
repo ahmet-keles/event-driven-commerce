@@ -70,6 +70,10 @@ public class Order {
         return totalAmount;
     }
 
+    public UUID getId() {
+        return id;
+    }
+
     public List<OrderItem> getItems() {
         return List.copyOf(items);
     }
