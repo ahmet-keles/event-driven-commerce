@@ -65,4 +65,8 @@ public class Order {
         totalAmount = totalAmount.add(item.subtotal());
         updatedAt = Instant.now();
     }
+
+    public BigDecimal getTotalAmount() {
+        return totalAmount;
+    }
 }
