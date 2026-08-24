@@ -58,6 +58,7 @@ class OrderEventsConsumerTest {
         verify(reservationService).reserve(
                 eventId,
                 "ORDER_ITEM_ADDED",
+                orderId,
                 productId,
                 3
         );

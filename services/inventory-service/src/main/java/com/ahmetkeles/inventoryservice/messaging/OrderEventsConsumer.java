@@ -48,6 +48,7 @@ public class OrderEventsConsumer {
             inventoryReservationService.reserve(
                     envelope.eventId(),
                     envelope.eventType(),
+                    event.orderId(),
                     event.productId(),
                     event.quantity()
             );
