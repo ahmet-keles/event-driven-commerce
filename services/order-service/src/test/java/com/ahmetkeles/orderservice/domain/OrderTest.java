@@ -6,6 +6,7 @@ import java.math.BigDecimal;
 import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 class OrderTest {
 
@@ -21,5 +22,13 @@ class OrderTest {
 
         assertEquals(1, order.getItems().size());
         assertEquals(new BigDecimal("30.00"), order.getTotalAmount());
+    }
+
+    @Test
+    void orderRequiresCustomerId() {
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> new Order(null, "USD")
+        );
     }
 }
