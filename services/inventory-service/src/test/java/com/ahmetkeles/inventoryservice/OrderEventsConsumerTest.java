@@ -1,5 +1,6 @@
 package com.ahmetkeles.inventoryservice;
 
+import com.ahmetkeles.inventoryservice.inventory.InventoryReservationService;
 import com.ahmetkeles.inventoryservice.messaging.OrderEventEnvelope;
 import com.ahmetkeles.inventoryservice.messaging.OrderEventsConsumer;
 import com.ahmetkeles.inventoryservice.messaging.OrderItemAddedEvent;
@@ -12,15 +13,22 @@ import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.mockito.Mockito.*;
 
 class OrderEventsConsumerTest {
 
     private final ObjectMapper objectMapper = new ObjectMapper();
+    private final InventoryReservationService reservationService =
+            mock(InventoryReservationService.class);
     private final OrderEventsConsumer consumer =
-            new OrderEventsConsumer(objectMapper);
+            new OrderEventsConsumer(
+                    objectMapper,
+                    reservationService
+            );
 
     @Test
     void processesOrderItemAddedEvent() throws Exception {
+        UUID eventId = UUID.randomUUID();
         UUID orderId = UUID.randomUUID();
         UUID productId = UUID.randomUUID();
 
@@ -36,7 +44,7 @@ class OrderEventsConsumerTest {
 
         String message = objectMapper.writeValueAsString(
                 new OrderEventEnvelope(
-                        UUID.randomUUID(),
+                        eventId,
                         "Order",
                         orderId,
                         "ORDER_ITEM_ADDED",
@@ -46,6 +54,13 @@ class OrderEventsConsumerTest {
         );
 
         assertDoesNotThrow(() -> consumer.consume(message));
+
+        verify(reservationService).reserve(
+                eventId,
+                "ORDER_ITEM_ADDED",
+                productId,
+                3
+        );
     }
 
     @Test
@@ -62,6 +77,8 @@ class OrderEventsConsumerTest {
         );
 
         assertDoesNotThrow(() -> consumer.consume(message));
+
+        verifyNoInteractions(reservationService);
     }
 
     @Test
@@ -70,5 +87,7 @@ class OrderEventsConsumerTest {
                 IllegalStateException.class,
                 () -> consumer.consume("not-json")
         );
+
+        verifyNoInteractions(reservationService);
     }
 }

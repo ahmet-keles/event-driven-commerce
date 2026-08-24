@@ -1,5 +1,6 @@
 package com.ahmetkeles.inventoryservice.messaging;
 
+import com.ahmetkeles.inventoryservice.inventory.InventoryReservationService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.kafka.annotation.KafkaListener;
@@ -15,9 +16,14 @@ public class OrderEventsConsumer {
     private static final String ORDER_ITEM_ADDED = "ORDER_ITEM_ADDED";
 
     private final ObjectMapper objectMapper;
+    private final InventoryReservationService inventoryReservationService;
 
-    public OrderEventsConsumer(ObjectMapper objectMapper) {
+    public OrderEventsConsumer(
+            ObjectMapper objectMapper,
+            InventoryReservationService inventoryReservationService
+    ) {
         this.objectMapper = objectMapper;
+        this.inventoryReservationService = inventoryReservationService;
     }
 
     @KafkaListener(topics = "${app.kafka.order-events-topic}")
@@ -39,8 +45,15 @@ public class OrderEventsConsumer {
                             OrderItemAddedEvent.class
                     );
 
+            inventoryReservationService.reserve(
+                    envelope.eventId(),
+                    envelope.eventType(),
+                    event.productId(),
+                    event.quantity()
+            );
+
             log.info(
-                    "Received ORDER_ITEM_ADDED for order {}, product {}, quantity {}",
+                    "Reserved inventory for order {}, product {}, quantity {}",
                     event.orderId(),
                     event.productId(),
                     event.quantity()
