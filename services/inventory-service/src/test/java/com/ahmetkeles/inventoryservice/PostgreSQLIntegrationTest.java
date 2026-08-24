@@ -27,5 +27,10 @@ public abstract class PostgreSQLIntegrationTest {
                 "spring.kafka.listener.auto-startup",
                 () -> "false"
         );
+
+        registry.add(
+                "app.outbox.publisher-enabled",
+                () -> "false"
+        );
     }
 }
