@@ -61,6 +61,12 @@ public class OrderService {
     }
 
     @Transactional
+    public void confirmOrder(UUID orderId) {
+        Order order = findOrderWithItems(orderId);
+        order.confirm();
+    }
+
+    @Transactional
     public Order addItem(
             UUID orderId,
             UUID productId,

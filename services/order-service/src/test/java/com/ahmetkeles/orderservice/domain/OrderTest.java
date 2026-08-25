@@ -70,6 +70,25 @@ class OrderTest {
     }
 
     @Test
+    void pendingOrderCanBeConfirmed() {
+        Order order = new Order(UUID.randomUUID(), "USD");
+
+        order.confirm();
+
+        assertEquals(OrderStatus.CONFIRMED, order.getStatus());
+    }
+
+    @Test
+    void confirmingAlreadyConfirmedOrderIsIdempotent() {
+        Order order = new Order(UUID.randomUUID(), "USD");
+
+        order.confirm();
+        order.confirm();
+
+        assertEquals(OrderStatus.CONFIRMED, order.getStatus());
+    }
+
+    @Test
     void itemsCannotBeModifiedByCallers() {
         Order order = new Order(UUID.randomUUID(), "USD");
 
