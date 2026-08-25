@@ -66,6 +66,15 @@ public class Order {
         updatedAt = Instant.now();
     }
 
+    public void confirm() {
+        if (status != OrderStatus.PENDING) {
+            return;
+        }
+
+        status = OrderStatus.CONFIRMED;
+        updatedAt = Instant.now();
+    }
+
     public BigDecimal getTotalAmount() {
         return totalAmount;
     }
