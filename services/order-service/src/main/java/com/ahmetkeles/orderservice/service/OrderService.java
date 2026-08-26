@@ -67,6 +67,12 @@ public class OrderService {
     }
 
     @Transactional
+    public void cancelOrder(UUID orderId) {
+        Order order = findOrderWithItems(orderId);
+        order.cancel();
+    }
+
+    @Transactional
     public Order addItem(
             UUID orderId,
             UUID productId,
