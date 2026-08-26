@@ -9,7 +9,9 @@ import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 
@@ -41,6 +43,64 @@ class InventoryEventsConsumerTest {
         assertDoesNotThrow(() -> consumer.consume(message));
 
         verify(orderService).confirmOrder(orderId);
+        verify(orderService, never()).cancelOrder(any());
+    }
+
+    @Test
+    void processesInventoryReservationFailedEvent() throws Exception {
+        UUID orderId = UUID.randomUUID();
+        UUID productId = UUID.randomUUID();
+        String payload = objectMapper.writeValueAsString(
+                new InventoryReservationFailedEvent(
+                        orderId,
+                        productId,
+                        3,
+                        "INSUFFICIENT_INVENTORY"
+                )
+        );
+        String message = objectMapper.writeValueAsString(
+                new InventoryEventEnvelope(
+                        UUID.randomUUID(),
+                        "Order",
+                        orderId,
+                        "INVENTORY_RESERVATION_FAILED",
+                        payload,
+                        Instant.now()
+                )
+        );
+
+        assertDoesNotThrow(() -> consumer.consume(message));
+
+        verify(orderService).cancelOrder(orderId);
+        verify(orderService, never()).confirmOrder(any());
+    }
+
+    @Test
+    void processesUnknownInventoryItemFailureEvent() throws Exception {
+        UUID orderId = UUID.randomUUID();
+        UUID productId = UUID.randomUUID();
+        String payload = objectMapper.writeValueAsString(
+                new InventoryReservationFailedEvent(
+                        orderId,
+                        productId,
+                        3,
+                        "INVENTORY_ITEM_NOT_FOUND"
+                )
+        );
+        String message = objectMapper.writeValueAsString(
+                new InventoryEventEnvelope(
+                        UUID.randomUUID(),
+                        "Order",
+                        orderId,
+                        "INVENTORY_RESERVATION_FAILED",
+                        payload,
+                        Instant.now()
+                )
+        );
+
+        assertDoesNotThrow(() -> consumer.consume(message));
+
+        verify(orderService).cancelOrder(orderId);
     }
 
     @Test

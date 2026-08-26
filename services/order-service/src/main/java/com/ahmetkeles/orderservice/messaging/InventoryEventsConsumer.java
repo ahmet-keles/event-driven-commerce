@@ -14,6 +14,8 @@ public class InventoryEventsConsumer {
             LoggerFactory.getLogger(InventoryEventsConsumer.class);
 
     private static final String INVENTORY_RESERVED = "INVENTORY_RESERVED";
+    private static final String INVENTORY_RESERVATION_FAILED =
+            "INVENTORY_RESERVATION_FAILED";
 
     private final ObjectMapper objectMapper;
     private final OrderService orderService;
@@ -35,29 +37,56 @@ public class InventoryEventsConsumer {
                             InventoryEventEnvelope.class
                     );
 
-            if (!INVENTORY_RESERVED.equals(envelope.eventType())) {
+            if (INVENTORY_RESERVED.equals(envelope.eventType())) {
+                handleInventoryReserved(envelope);
                 return;
             }
 
-            InventoryReservedEvent event =
-                    objectMapper.readValue(
-                            envelope.payload(),
-                            InventoryReservedEvent.class
-                    );
-
-            orderService.confirmOrder(event.orderId());
-
-            log.info(
-                    "Confirmed order {} after inventory reservation for product {}, quantity {}",
-                    event.orderId(),
-                    event.productId(),
-                    event.quantity()
-            );
+            if (INVENTORY_RESERVATION_FAILED.equals(envelope.eventType())) {
+                handleInventoryReservationFailed(envelope);
+            }
         } catch (Exception exception) {
             throw new IllegalStateException(
                     "Failed to process inventory event",
                     exception
             );
         }
+    }
+
+    private void handleInventoryReserved(InventoryEventEnvelope envelope) {
+        InventoryReservedEvent event =
+                objectMapper.readValue(
+                        envelope.payload(),
+                        InventoryReservedEvent.class
+                );
+
+        orderService.confirmOrder(event.orderId());
+
+        log.info(
+                "Confirmed order {} after inventory reservation for product {}, quantity {}",
+                event.orderId(),
+                event.productId(),
+                event.quantity()
+        );
+    }
+
+    private void handleInventoryReservationFailed(
+            InventoryEventEnvelope envelope
+    ) {
+        InventoryReservationFailedEvent event =
+                objectMapper.readValue(
+                        envelope.payload(),
+                        InventoryReservationFailedEvent.class
+                );
+
+        orderService.cancelOrder(event.orderId());
+
+        log.info(
+                "Cancelled order {} after failed inventory reservation for product {}, quantity {}: {}",
+                event.orderId(),
+                event.productId(),
+                event.requestedQuantity(),
+                event.reason()
+        );
     }
 }
