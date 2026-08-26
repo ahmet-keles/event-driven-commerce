@@ -1,41 +1,68 @@
+# Local development infrastructure only.
+#
+# The Spring Boot services are run on the host (see README), so this file only
+# provides the backing stores and the broker they connect to over published
+# ports. Variables come from `.env` (copy `.env.example`), which is the single
+# source of truth shared by Compose and the applications.
+#
+# Images are multi-arch (linux/amd64 + linux/arm64), so no `platform:` override
+# is needed on Apple Silicon.
+#
+# Bring the stack up and wait for readiness:
+#   docker compose up -d --wait
+
 services:
   postgres:
     image: postgres:17-alpine
     container_name: commerce-postgres
+    restart: unless-stopped
     environment:
-      POSTGRES_DB: ${POSTGRES_DB}
-      POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:?POSTGRES_DB is required - copy .env.example to .env}
+      POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER is required - copy .env.example to .env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required - copy .env.example to .env}
     ports:
-      - "5433:5432"
+      - "${POSTGRES_PORT:-5433}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    networks:
+      - commerce
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      # Check over TCP rather than the unix socket: during initdb the bootstrap
+      # server listens on the socket only, so a socket probe reports "ready"
+      # before the database actually accepts client connections.
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -p 5432 -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
       interval: 5s
       timeout: 5s
       retries: 10
+      start_period: 15s
 
   inventory-postgres:
     image: postgres:17-alpine
     container_name: commerce-inventory-postgres
+    restart: unless-stopped
     environment:
-      POSTGRES_DB: inventory
-      POSTGRES_USER: inventory_user
-      POSTGRES_PASSWORD: ${INVENTORY_POSTGRES_PASSWORD}
+      POSTGRES_DB: ${INVENTORY_POSTGRES_DB:-inventory}
+      POSTGRES_USER: ${INVENTORY_POSTGRES_USER:-inventory_user}
+      POSTGRES_PASSWORD: ${INVENTORY_POSTGRES_PASSWORD:?INVENTORY_POSTGRES_PASSWORD is required - copy .env.example to .env}
     ports:
-      - "5434:5432"
+      - "${INVENTORY_POSTGRES_PORT:-5434}:5432"
     volumes:
       - inventory_postgres_data:/var/lib/postgresql/data
+    networks:
+      - commerce
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U inventory_user -d inventory"]
+      test:
+        - "CMD-SHELL"
+        - "pg_isready -h 127.0.0.1 -p 5432 -U ${INVENTORY_POSTGRES_USER:-inventory_user} -d ${INVENTORY_POSTGRES_DB:-inventory}"
       interval: 5s
       timeout: 5s
       retries: 10
+      start_period: 15s
 
   kafka:
     image: apache/kafka:4.0.0
     container_name: commerce-kafka
+    restart: unless-stopped
     ports:
       - "29092:29092"
     environment:
@@ -52,10 +79,31 @@ services:
       KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
       KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
       KAFKA_NUM_PARTITIONS: 3
+      # Without this the broker keeps its data under the image default log dir
+      # and the volume below holds nothing, so topics and consumer offsets are
+      # lost on every `docker compose down`.
+      KAFKA_LOG_DIRS: /var/lib/kafka/data
     volumes:
+      # The image creates /var/lib/kafka/data as appuser:root with ug+w and
+      # declares it a VOLUME, so a fresh named volume inherits that ownership
+      # and the broker writes here as the non-root `appuser` it runs as.
       - kafka_data:/var/lib/kafka/data
+    networks:
+      - commerce
+    stop_grace_period: 30s
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 > /dev/null 2>&1"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
 
 volumes:
   postgres_data:
   inventory_postgres_data:
   kafka_data:
+
+networks:
+  commerce:
+    name: commerce-net
+    driver: bridge
