@@ -1,5 +1,9 @@
 # Order Domain Model
 
+Reference for the order aggregate as modelled in `order-service`.
+For how these statuses are actually driven at runtime, see
+[ARCHITECTURE.md](ARCHITECTURE.md#order-lifecycle).
+
 ## Order
 
 Represents a customer's purchase request.
@@ -28,11 +32,16 @@ Represents one product inside an order.
 
 ## Order Status
 
-Initial supported states:
+Supported states (`OrderStatus`, also enforced by a `CHECK` constraint on the
+`orders` table):
 
 - `PENDING`
 - `CONFIRMED`
 - `CANCELLED`
+
+Implemented transitions: an order is created `PENDING` and becomes `CONFIRMED`
+when an `INVENTORY_RESERVED` event is consumed. `CANCELLED` is defined but no
+code path currently sets it.
 
 ## Initial Business Rules
 
@@ -43,3 +52,7 @@ Initial supported states:
 5. Every order must specify a currency.
 6. A new order begins with status `PENDING`.
 7. `totalAmount` is calculated from the order items.
+
+Rules 2–7 are enforced in code today. Rule 1 is not: `POST /api/orders`
+creates an empty `PENDING` order and items are added afterwards, so an order
+with no items is currently representable.
