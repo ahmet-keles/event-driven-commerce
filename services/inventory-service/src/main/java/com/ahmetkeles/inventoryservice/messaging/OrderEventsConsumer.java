@@ -54,7 +54,7 @@ public class OrderEventsConsumer {
             );
 
             log.info(
-                    "Reserved inventory for order {}, product {}, quantity {}",
+                    "Processed inventory reservation for order {}, product {}, quantity {}",
                     event.orderId(),
                     event.productId(),
                     event.quantity()

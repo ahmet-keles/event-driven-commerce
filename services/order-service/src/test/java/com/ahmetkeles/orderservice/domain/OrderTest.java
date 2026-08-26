@@ -89,6 +89,45 @@ class OrderTest {
     }
 
     @Test
+    void pendingOrderCanBeCancelled() {
+        Order order = new Order(UUID.randomUUID(), "USD");
+
+        order.cancel();
+
+        assertEquals(OrderStatus.CANCELLED, order.getStatus());
+    }
+
+    @Test
+    void cancellingAlreadyCancelledOrderIsIdempotent() {
+        Order order = new Order(UUID.randomUUID(), "USD");
+
+        order.cancel();
+        order.cancel();
+
+        assertEquals(OrderStatus.CANCELLED, order.getStatus());
+    }
+
+    @Test
+    void confirmedOrderIsNotCancelled() {
+        Order order = new Order(UUID.randomUUID(), "USD");
+
+        order.confirm();
+        order.cancel();
+
+        assertEquals(OrderStatus.CONFIRMED, order.getStatus());
+    }
+
+    @Test
+    void cancelledOrderIsNotConfirmed() {
+        Order order = new Order(UUID.randomUUID(), "USD");
+
+        order.cancel();
+        order.confirm();
+
+        assertEquals(OrderStatus.CANCELLED, order.getStatus());
+    }
+
+    @Test
     void itemsCannotBeModifiedByCallers() {
         Order order = new Order(UUID.randomUUID(), "USD");
 
