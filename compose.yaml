@@ -63,10 +63,6 @@ services:
     image: apache/kafka:4.0.0
     container_name: commerce-kafka
     restart: unless-stopped
-    # The image runs as the non-root `appuser`, but a named volume is created
-    # root-owned, so the broker cannot write its log dirs into it. Local dev
-    # broker: run as root so the persisted volume is usable.
-    user: root
     ports:
       - "29092:29092"
     environment:
@@ -88,6 +84,9 @@ services:
       # lost on every `docker compose down`.
       KAFKA_LOG_DIRS: /var/lib/kafka/data
     volumes:
+      # The image creates /var/lib/kafka/data as appuser:root with ug+w and
+      # declares it a VOLUME, so a fresh named volume inherits that ownership
+      # and the broker writes here as the non-root `appuser` it runs as.
       - kafka_data:/var/lib/kafka/data
     networks:
       - commerce
