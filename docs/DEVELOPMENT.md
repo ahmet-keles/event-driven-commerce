@@ -27,6 +27,7 @@ docker info      # must succeed; the daemon has to be running
 ```
 compose.yaml                    postgres, inventory-postgres, kafka
 .env.example                    template for local secrets/config
+.github/workflows/ci.yml        CI: both test suites on Java 21
 docs/                           this documentation
 services/order-service/         Spring Boot app, REST API + Kafka
 services/inventory-service/     Spring Boot app, Kafka only (no HTTP)
@@ -38,54 +39,70 @@ services/inventory-service/     Spring Boot app, Kafka only (no HTTP)
 cp .env.example .env
 ```
 
-Fill in real local values. The file drives both Docker Compose (which reads
-`.env` from the repository root automatically) and the services:
+Fill in real local values. `.env` is the single source of truth shared by
+Docker Compose (which reads it from the repository root automatically) and by
+the services when you run them on the host. Every variable in
+`.env.example` is listed below:
 
-| Variable | Used by | Default in code |
+| Variable | Used by | Behavior if unset |
 |---|---|---|
-| `POSTGRES_DB` | compose `postgres`, order-service | none — required |
-| `POSTGRES_USER` | compose `postgres`, order-service | none — required |
-| `POSTGRES_PASSWORD` | compose `postgres`, order-service | none — required |
+| `POSTGRES_DB` | compose `postgres`, order-service | **Compose fails fast** (`:?` guard); order-service has no default either |
+| `POSTGRES_USER` | compose `postgres`, order-service | **Compose fails fast**; no default |
+| `POSTGRES_PASSWORD` | compose `postgres`, order-service | **Compose fails fast**; no default |
 | `POSTGRES_HOST` | order-service | `127.0.0.1` |
-| `POSTGRES_PORT` | order-service | `5433` |
-| `INVENTORY_POSTGRES_PASSWORD` | compose `inventory-postgres`, inventory-service | none — required |
+| `POSTGRES_PORT` | compose host port mapping, order-service | `5433` on both sides |
+| `INVENTORY_POSTGRES_DB` | compose `inventory-postgres`, inventory-service | `inventory` |
+| `INVENTORY_POSTGRES_USER` | compose `inventory-postgres`, inventory-service | `inventory_user` |
+| `INVENTORY_POSTGRES_PASSWORD` | compose `inventory-postgres`, inventory-service | **Compose fails fast**; no default |
 | `INVENTORY_POSTGRES_HOST` | inventory-service | `127.0.0.1` |
-| `INVENTORY_POSTGRES_PORT` | inventory-service | `5434` |
-| `INVENTORY_POSTGRES_DB` | inventory-service | `inventory` |
-| `INVENTORY_POSTGRES_USER` | inventory-service | `inventory_user` |
+| `INVENTORY_POSTGRES_PORT` | compose host port mapping, inventory-service | `5434` on both sides |
 | `KAFKA_BOOTSTRAP_SERVERS` | both services | `localhost:29092` |
 
-The compose file hardcodes the inventory database name and user (`inventory` /
-`inventory_user`), which is why only the password is templated there.
+The three passwords/identities marked *fails fast* use Compose's
+`${VAR:?message}` form, so `docker compose up` stops with a readable error
+instead of starting a half-configured database. Everything else uses
+`${VAR:-default}`, so the values above apply when the variable is absent.
+Changing `POSTGRES_PORT` or `INVENTORY_POSTGRES_PORT` moves both the published
+container port and the service's JDBC URL, keeping them in step.
 
 `.env` is git-ignored — never commit it.
 
 ## 2. Start the infrastructure
 
 ```bash
-docker compose up -d
+docker compose up -d --wait
 ```
 
-That starts three containers:
+`--wait` blocks until every container reports healthy, so the services you start
+next never race a database that is still running `initdb`. That starts three
+containers on the `commerce-net` bridge network, all with
+`restart: unless-stopped`:
 
-| Compose service | Container | Host port |
-|---|---|---|
-| `postgres` | `commerce-postgres` | `5433` → 5432 |
-| `inventory-postgres` | `commerce-inventory-postgres` | `5434` → 5432 |
-| `kafka` | `commerce-kafka` | `29092` (external listener) |
+| Compose service | Container | Host port | Healthcheck |
+|---|---|---|---|
+| `postgres` | `commerce-postgres` | `${POSTGRES_PORT:-5433}` → 5432 | `pg_isready` over TCP, 15 s start period |
+| `inventory-postgres` | `commerce-inventory-postgres` | `${INVENTORY_POSTGRES_PORT:-5434}` → 5432 | `pg_isready` over TCP, 15 s start period |
+| `kafka` | `commerce-kafka` | `29092` (EXTERNAL listener) | `kafka-broker-api-versions.sh`, 30 s start period |
+
+The PostgreSQL healthchecks probe `127.0.0.1:5432` rather than the unix socket
+on purpose: during `initdb` the bootstrap server listens on the socket only, so
+a socket probe would report ready before the database accepts client
+connections.
 
 Kafka runs as a single-node KRaft cluster (broker + controller in one process)
-with a default of 3 partitions per topic. Data for all three lives in named
-volumes, so it survives `docker compose down`; use
-`docker compose down -v` to wipe it.
+with 3 default partitions per topic, and `KAFKA_LOG_DIRS` pointed at the
+`kafka_data` volume — so **topics and consumer offsets survive
+`docker compose down`** along with both databases' data. Use
+`docker compose down -v` to wipe all three volumes and start clean. The broker
+gets a 30 s `stop_grace_period` for an orderly shutdown.
 
 To bring up only part of the stack, name the services:
-`docker compose up -d postgres kafka`.
+`docker compose up -d --wait postgres kafka`.
 
 Check state:
 
 ```bash
-docker compose ps
+docker compose ps          # includes each container's health status
 docker compose logs -f kafka
 ```
 
@@ -124,7 +141,7 @@ curl -s -X POST http://localhost:8080/api/orders/<ORDER_ID>/items \
   -H 'Content-Type: application/json' \
   -d '{"productId":"22222222-2222-2222-2222-222222222222","quantity":2,"unitPrice":9.99}'
 
-# read it back — status flips to CONFIRMED once inventory replies
+# read it back — CONFIRMED once inventory reserves, CANCELLED if it cannot
 curl -s http://localhost:8080/api/orders/<ORDER_ID>
 ```
 
@@ -150,8 +167,9 @@ for order …`) or by querying its database.
 
 There is no API, admin endpoint, or seed migration that creates
 `inventory_items` rows. An `ORDER_ITEM_ADDED` event for a product with no row
-fails with `InventoryItemNotFoundException`, so insert stock manually before
-running the end-to-end flow:
+now produces an `INVENTORY_RESERVATION_FAILED` event with
+`reason=INVENTORY_ITEM_NOT_FOUND`, and the order is **cancelled** rather than
+confirmed — so insert stock before running the happy-path flow:
 
 ```bash
 docker exec -it commerce-inventory-postgres \
@@ -191,11 +209,11 @@ each test registers its container's JDBC URL and bootstrap servers through
 `@DynamicPropertySource`, so no environment variables are required.
 
 ```bash
-# order-service
+# order-service — 45 tests
 cd services/order-service
 ./mvnw test
 
-# inventory-service
+# inventory-service — 22 tests
 cd services/inventory-service
 ./mvnw test
 ```
@@ -213,9 +231,9 @@ Run a single class or method with the Surefire filter:
 
 | Test | Type | Covers |
 |---|---|---|
-| `domain/OrderTest`, `domain/OrderItemTest` | plain unit | Invariants, totals, `confirm()` idempotency, defensive item list |
-| `service/OrderServiceTest` | unit (mocks) | Confirming a pending order |
-| `messaging/InventoryEventsConsumerTest` | unit (mocks) | `INVENTORY_RESERVED` handling, ignoring other types, rejecting malformed messages |
+| `domain/OrderTest`, `domain/OrderItemTest` | plain unit | Invariants, totals, `confirm()`/`cancel()` idempotency, terminal-state guards (a confirmed order is not cancelled and vice versa), defensive item list |
+| `service/OrderServiceTest` | unit (mocks) | Confirming and cancelling a pending order, cancellation idempotency, cancelling an unknown order |
+| `messaging/InventoryEventsConsumerTest` | unit (mocks) | `INVENTORY_RESERVED` and `INVENTORY_RESERVATION_FAILED` handling (including the `INVENTORY_ITEM_NOT_FOUND` reason), ignoring other types, rejecting malformed messages |
 | `outbox/OutboxPublisherTest` | unit (mocks) | Publish success marks the row; failure leaves it for retry |
 | `PostgreSQLIntegrationTest` | Testcontainers base | Starts PostgreSQL; sets `app.kafka.enabled=false` so subclasses need no broker |
 | `OrderServiceApplicationTests`, `repository/OrderRepositoryIntegrationTest`, `api/OrderApiIntegrationTest`, `outbox/OrderOutboxIntegrationTest` | Postgres integration | Context load, persistence, full REST surface incl. validation/404s, outbox writes and transactional rollback |
@@ -227,9 +245,10 @@ Run a single class or method with the Surefire filter:
 |---|---|---|
 | `InventoryItemTest` | plain unit | Reservation rules, negative/zero quantities, invalid construction |
 | `OrderEventsConsumerTest` | unit (mocks) | `ORDER_ITEM_ADDED` handling, ignoring other types, rejecting malformed messages |
+| `InventoryReservationServiceTest` | unit (mocks) | Duplicate events short-circuit before any reservation attempt; insufficient stock and unknown items each write exactly one `INVENTORY_RESERVATION_FAILED` event; success still writes `INVENTORY_RESERVED` |
 | `InventoryOutboxPublisherTest` | unit (mocks) | Publish success/failure bookkeeping |
 | `PostgreSQLIntegrationTest` | Testcontainers base | Starts PostgreSQL; disables listener auto-startup and the outbox publisher so subclasses need no broker |
-| `InventoryReservationIntegrationTest` | Postgres integration | Reserve + `processed_events` + outbox in one transaction, duplicate suppression, rollback on insufficient stock |
+| `InventoryReservationIntegrationTest` | Postgres integration | Reserve + `processed_events` + outbox in one transaction, duplicate suppression, and a committed `INVENTORY_RESERVATION_FAILED` row for both insufficient stock and unknown items |
 | `KafkaInventoryIntegrationTest` | Postgres + Kafka | A real `ORDER_ITEM_ADDED` message reserves stock once, even when delivered twice |
 
 ### Troubleshooting tests
@@ -241,6 +260,27 @@ Run a single class or method with the Surefire filter:
 - *Port conflicts* — Testcontainers uses random host ports and does not clash
   with the Compose stack; conflicts on `5433`/`5434`/`29092` come from another
   Compose stack or a local PostgreSQL/Kafka install.
+
+## Continuous integration
+
+`.github/workflows/ci.yml` runs on every push to `main` and every pull request
+targeting `main`:
+
+- A matrix job per service (`inventory-service`, `order-service`) on
+  `ubuntu-latest`, with `fail-fast: false` so both results are always reported —
+  the workflow still fails if either service fails.
+- `actions/setup-java@v4` with the Temurin distribution, `java-version: '21'`,
+  and the Maven cache keyed on that service's `pom.xml`.
+- `./mvnw -B --no-transfer-progress test` in the service directory — the same
+  command you run locally.
+- 30-minute timeout per job and read-only `contents` permission.
+
+No Docker setup step is needed: `ubuntu-latest` runners ship with a running
+Docker daemon, which is all Testcontainers requires to start the PostgreSQL and
+Kafka containers. CI does **not** use `compose.yaml` or `.env`.
+
+Because CI runs exactly the local command, a green `./mvnw test` in both service
+directories is a reliable predictor of a green pipeline.
 
 ## Building without tests
 

@@ -39,9 +39,10 @@ Supported states (`OrderStatus`, also enforced by a `CHECK` constraint on the
 - `CONFIRMED`
 - `CANCELLED`
 
-Implemented transitions: an order is created `PENDING` and becomes `CONFIRMED`
-when an `INVENTORY_RESERVED` event is consumed. `CANCELLED` is defined but no
-code path currently sets it.
+Implemented transitions: an order is created `PENDING`, becomes `CONFIRMED`
+when an `INVENTORY_RESERVED` event is consumed, and becomes `CANCELLED` when an
+`INVENTORY_RESERVATION_FAILED` event is consumed. Both are terminal — the first
+inventory event to arrive decides the outcome.
 
 ## Initial Business Rules
 

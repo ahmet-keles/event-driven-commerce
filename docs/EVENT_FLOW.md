@@ -11,6 +11,10 @@ For the bigger picture see [ARCHITECTURE.md](ARCHITECTURE.md).
 | `order.events` | order-service `OutboxPublisher` | inventory-service `OrderEventsConsumer` (group `inventory-service`) | 3 / 1 | order id |
 | `inventory.events` | inventory-service `OutboxPublisher` | order-service `InventoryEventsConsumer` (group `order-service`) | 3 / 1 | order id |
 
+Four event types flow across them today: `ORDER_CREATED` and
+`ORDER_ITEM_ADDED` on `order.events`, and `INVENTORY_RESERVED` /
+`INVENTORY_RESERVATION_FAILED` on `inventory.events`.
+
 Topic names come from configuration, not from constants in code:
 
 ```properties
@@ -97,10 +101,27 @@ Written by `InventoryReservationService.reserve`. Payload:
 { "orderId": "…", "productId": "…", "quantity": 2 }
 ```
 
-Consumed by order-service, which confirms the order.
+Consumed by order-service, which confirms the order (`PENDING → CONFIRMED`).
 
-There is currently **no** failure event on `inventory.events` — insufficient
-stock rolls the consumer transaction back and produces nothing.
+### `INVENTORY_RESERVATION_FAILED` — `inventory.events`
+
+Written by `InventoryReservationService` when a reservation cannot be
+satisfied. Payload:
+
+```json
+{ "orderId": "…", "productId": "…", "requestedQuantity": 5, "reason": "INSUFFICIENT_INVENTORY" }
+```
+
+`reason` is one of:
+
+| Reason | Cause |
+|---|---|
+| `INSUFFICIENT_INVENTORY` | The product row exists but `availableQuantity < requestedQuantity` |
+| `INVENTORY_ITEM_NOT_FOUND` | No `inventory_items` row exists for the product |
+
+Note the field name: the payload carries `requestedQuantity`, not `quantity`.
+Consumed by order-service, which cancels the order (`PENDING → CANCELLED`).
+Stock is left untouched — a failure never reserves anything.
 
 ## End-to-end sequence
 
@@ -126,16 +147,25 @@ sequenceDiagram
 
     K->>I: ORDER_ITEM_ADDED
     I->>IDB: check processed_events(eventId)
-    I->>IDB: reserve stock + INSERT processed_events<br/>+ INSERT outbox_events (INVENTORY_RESERVED)
-    Note over I,IDB: one transaction
+    alt stock available
+        I->>IDB: reserve stock + INSERT processed_events<br/>+ INSERT outbox_events (INVENTORY_RESERVED)
+    else missing item or insufficient stock
+        I->>IDB: INSERT processed_events<br/>+ INSERT outbox_events (INVENTORY_RESERVATION_FAILED)
+    end
+    Note over I,IDB: one transaction, committed either way
 
     loop every app.outbox.publish-interval-ms
         I->>K: send to inventory.events (key = orderId)
         I->>IDB: UPDATE published_at
     end
 
-    K->>O: INVENTORY_RESERVED
-    O->>ODB: order.confirm() → CONFIRMED
+    alt INVENTORY_RESERVED
+        K->>O: INVENTORY_RESERVED
+        O->>ODB: order.confirm() → CONFIRMED
+    else INVENTORY_RESERVATION_FAILED
+        K->>O: INVENTORY_RESERVATION_FAILED
+        O->>ODB: order.cancel() → CANCELLED
+    end
 ```
 
 ## Transactional outbox pattern
@@ -156,7 +186,7 @@ The `outbox_events` table in both services:
 | `id` | UUID primary key; travels as the envelope's `eventId` |
 | `aggregate_type` | `"Order"` in both services |
 | `aggregate_id` | order id; also the Kafka message key |
-| `event_type` | `ORDER_CREATED`, `ORDER_ITEM_ADDED`, `INVENTORY_RESERVED` |
+| `event_type` | `ORDER_CREATED`, `ORDER_ITEM_ADDED`, `INVENTORY_RESERVED`, `INVENTORY_RESERVATION_FAILED` |
 | `payload` | `TEXT`, the JSON-serialized domain event |
 | `occurred_at` | set at construction |
 | `published_at` | `NULL` until the row reaches Kafka |
@@ -197,17 +227,22 @@ a successful publish stamps `published_at`, a failing one leaves it null.
 ## Idempotency
 
 **inventory-service — implemented.** Every processed envelope's `eventId` is
-recorded in `processed_events` inside the reservation transaction, and
-`reserve()` returns immediately if the id is already present. A duplicate
-`ORDER_ITEM_ADDED` therefore reserves stock once and writes one outbox row —
-asserted by `InventoryReservationIntegrationTest.duplicateEventDoesNotReserveOrWriteOutboxTwice`
-and, over a real broker, by
+recorded in `processed_events` inside the reservation transaction — on the
+failure path as well as the success path — and `reserve()` returns immediately
+if the id is already present. A duplicate `ORDER_ITEM_ADDED` therefore reserves
+stock at most once and emits exactly one outbox row, whichever way it resolved.
+Asserted by
+`InventoryReservationIntegrationTest.duplicateEventDoesNotReserveOrWriteOutboxTwice`,
+`InventoryReservationServiceTest.duplicateFailedEventWritesFailureOutboxEventOnlyOnce`,
+and, over a real broker,
 `KafkaInventoryIntegrationTest.duplicateKafkaEventReservesInventoryOnlyOnce`.
 
 **order-service — not implemented.** There is no `processed_events` equivalent.
-Duplicate `INVENTORY_RESERVED` events are harmless only because
-`Order.confirm()` is a no-op on an order that is not `PENDING`. Any future
-consumer logic that is not naturally idempotent will need real de-duplication.
+Duplicate or interleaved `INVENTORY_RESERVED` / `INVENTORY_RESERVATION_FAILED`
+events are harmless only because `Order.confirm()` and `Order.cancel()` are
+no-ops on an order that is no longer `PENDING` — the first event to arrive
+decides the outcome. Any future consumer logic that is not naturally idempotent
+will need real de-duplication.
 
 ## Failure behavior
 
@@ -215,16 +250,20 @@ consumer logic that is not naturally idempotent will need real de-duplication.
 |---|---|
 | Kafka is down while a service is running | Outbox rows accumulate unpublished and are retried each cycle; the API keeps working |
 | Broker rejects/times out a send (10 s) | Row stays unpublished; retried next cycle; inventory-service logs, order-service does not |
-| Unknown `productId` in `ORDER_ITEM_ADDED` | `InventoryItemNotFoundException`; transaction rolls back; consumer throws |
-| Insufficient stock | `InsufficientInventoryException`; transaction rolls back — no reservation, no `processed_events` row, no outbox row, no event back to order-service |
+| Unknown `productId` in `ORDER_ITEM_ADDED` | Caught; transaction commits with a `processed_events` row and an `INVENTORY_RESERVATION_FAILED` event (`reason=INVENTORY_ITEM_NOT_FOUND`); order-service cancels the order |
+| Insufficient stock | Caught; transaction commits with a `processed_events` row and an `INVENTORY_RESERVATION_FAILED` event (`reason=INSUFFICIENT_INVENTORY`); stock untouched; order-service cancels the order |
 | Malformed message | Consumer wraps the cause in `IllegalStateException` and rethrows (`rejectsMalformedMessage` in both consumer tests) |
-| Unknown `orderId` in `INVENTORY_RESERVED` | `OrderNotFoundException` out of `confirmOrder`, wrapped and rethrown by the consumer |
+| Unknown `orderId` in an inventory event | `OrderNotFoundException` out of `confirmOrder`/`cancelOrder`, wrapped and rethrown by the consumer |
 | Event type the consumer does not handle | Silently ignored |
+| Order already `CONFIRMED` or `CANCELLED` | The transition is a no-op; the event is consumed and the order is left as it is |
 
-No `DefaultErrorHandler`, retry topic, or dead-letter topic is configured in
-either service, so Spring Kafka's out-of-the-box error handling applies to
-anything a listener throws. Retry policy, DLQs, and a failure event for
-unsatisfiable reservations are **planned, not implemented**.
+Reservation failures are now a **modelled outcome**, not an error: the consumer
+does not throw and the order ends up `CANCELLED`. What is still missing is
+recovery from genuine errors — no `DefaultErrorHandler`, retry topic, or
+dead-letter topic is configured in either service, so Spring Kafka's
+out-of-the-box error handling applies to anything a listener does throw. Retry
+policy and DLQs remain **planned, not implemented**, as does releasing stock
+that was reserved for an order later cancelled by a different item's failure.
 
 ## Consumer configuration
 

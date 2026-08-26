@@ -19,12 +19,14 @@ Implemented and running today:
 - **Inventory Service** — Kafka consumer/producer with its own PostgreSQL database, idempotent stock reservation, transactional outbox (no HTTP API)
 - **Apache Kafka** — single-node KRaft broker; topics `order.events` and `inventory.events`
 - **PostgreSQL** — one database per service, schema managed by Flyway
-- **Docker Compose** — local infrastructure
+- **Docker Compose** — local infrastructure with healthchecks and persistent volumes
 - **Testcontainers** — integration tests against real PostgreSQL and Kafka
+- **GitHub Actions CI** — both test suites on Java 21, on every push to `main` and every pull request
 
 The end-to-end flow that works today: adding an item to an order publishes
-`ORDER_ITEM_ADDED`, the inventory service reserves stock and publishes
-`INVENTORY_RESERVED`, and the order service confirms the order.
+`ORDER_ITEM_ADDED`; the inventory service either reserves stock and publishes
+`INVENTORY_RESERVED` — confirming the order — or publishes
+`INVENTORY_RESERVATION_FAILED`, which cancels it.
 
 ## Planned Services
 
@@ -35,7 +37,7 @@ The end-to-end flow that works today: adding an item to an order publishes
 
 - Redis
 - AWS
-- GitHub Actions CI/CD
+- Continuous deployment (CI is already in place)
 
 ## Engineering Goals
 
@@ -44,17 +46,19 @@ Already in place:
 - Event-driven communication between services
 - Transactional outbox pattern
 - Idempotent event consumers (inventory service)
+- Reservation-failure events and order cancellation
 - Integration testing with Testcontainers
+- Continuous integration on every push and pull request
 
 Still to come:
 
+- Multi-item reservation semantics and releasing reserved stock
 - Saga-style workflows and compensating actions
-- Reservation-failure handling and order cancellation
 - Retry and dead-letter handling
 - Distributed caching
 - Observability and metrics beyond Actuator health
 - Load testing
-- Failure-recovery scenarios
+- Payment and notification services
 - Cloud deployment
 
 ## Tech Stack
@@ -81,9 +85,12 @@ inspecting state, are in [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
 ### Start the infrastructure
 
 ```bash
-cp .env.example .env   # then fill in your local values
-docker compose up -d   # postgres (5433), inventory-postgres (5434), kafka (29092)
+cp .env.example .env          # then fill in your local values
+docker compose up -d --wait   # postgres (5433), inventory-postgres (5434), kafka (29092)
 ```
+
+`--wait` returns once all three containers report healthy. Data lives in named
+volumes and survives `docker compose down`; use `down -v` to wipe it.
 
 ### Run Order Service
 
@@ -135,9 +142,11 @@ containers via Testcontainers.
 From the repository root:
 
 ```bash
-(cd services/order-service && ./mvnw test)
-(cd services/inventory-service && ./mvnw test)
+(cd services/order-service && ./mvnw test)        # 45 tests
+(cd services/inventory-service && ./mvnw test)    # 22 tests
 ```
+
+The same two commands run in CI (`.github/workflows/ci.yml`) on Java 21.
 
 ## Project Status
 
