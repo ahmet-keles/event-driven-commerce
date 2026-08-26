@@ -25,9 +25,11 @@ class InventoryEventsConsumerTest {
     @Test
     void processesInventoryReservedEvent() throws Exception {
         UUID orderId = UUID.randomUUID();
+        UUID orderItemId = UUID.randomUUID();
         UUID productId = UUID.randomUUID();
         String payload = objectMapper.writeValueAsString(
-                new InventoryReservedEvent(orderId, productId, 3)
+                new InventoryReservedEvent(
+                        orderId, orderItemId, productId, 3)
         );
         String message = objectMapper.writeValueAsString(
                 new InventoryEventEnvelope(
@@ -42,17 +44,19 @@ class InventoryEventsConsumerTest {
 
         assertDoesNotThrow(() -> consumer.consume(message));
 
-        verify(orderService).confirmOrder(orderId);
+        verify(orderService).markItemReserved(orderId, orderItemId);
         verify(orderService, never()).cancelOrder(any());
     }
 
     @Test
     void processesInventoryReservationFailedEvent() throws Exception {
         UUID orderId = UUID.randomUUID();
+        UUID orderItemId = UUID.randomUUID();
         UUID productId = UUID.randomUUID();
         String payload = objectMapper.writeValueAsString(
                 new InventoryReservationFailedEvent(
                         orderId,
+                        orderItemId,
                         productId,
                         3,
                         "INSUFFICIENT_INVENTORY"
@@ -72,16 +76,18 @@ class InventoryEventsConsumerTest {
         assertDoesNotThrow(() -> consumer.consume(message));
 
         verify(orderService).cancelOrder(orderId);
-        verify(orderService, never()).confirmOrder(any());
+        verify(orderService, never()).markItemReserved(any(), any());
     }
 
     @Test
     void processesUnknownInventoryItemFailureEvent() throws Exception {
         UUID orderId = UUID.randomUUID();
+        UUID orderItemId = UUID.randomUUID();
         UUID productId = UUID.randomUUID();
         String payload = objectMapper.writeValueAsString(
                 new InventoryReservationFailedEvent(
                         orderId,
+                        orderItemId,
                         productId,
                         3,
                         "INVENTORY_ITEM_NOT_FOUND"

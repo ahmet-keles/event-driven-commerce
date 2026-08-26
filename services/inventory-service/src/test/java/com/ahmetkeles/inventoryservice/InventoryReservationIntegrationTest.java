@@ -41,6 +41,7 @@ class InventoryReservationIntegrationTest
     void reservesInventoryRecordsProcessedEventAndWritesOutboxEvent() {
         UUID eventId = UUID.randomUUID();
         UUID orderId = UUID.randomUUID();
+        UUID orderItemId = UUID.randomUUID();
         UUID productId = UUID.randomUUID();
 
         inventoryItemRepository.saveAndFlush(
@@ -51,6 +52,7 @@ class InventoryReservationIntegrationTest
                 eventId,
                 "ORDER_ITEM_ADDED",
                 orderId,
+                orderItemId,
                 productId,
                 3
         );
@@ -81,6 +83,9 @@ class InventoryReservationIntegrationTest
                 "\"productId\":\"" + productId + "\""
         ));
         assertTrue(outboxEvent.getPayload().contains(
+                "\"orderItemId\":\"" + orderItemId + "\""
+        ));
+        assertTrue(outboxEvent.getPayload().contains(
                 "\"quantity\":3"
         ));
     }
@@ -89,6 +94,7 @@ class InventoryReservationIntegrationTest
     void duplicateEventDoesNotReserveOrWriteOutboxTwice() {
         UUID eventId = UUID.randomUUID();
         UUID orderId = UUID.randomUUID();
+        UUID orderItemId = UUID.randomUUID();
         UUID productId = UUID.randomUUID();
 
         inventoryItemRepository.saveAndFlush(
@@ -99,6 +105,7 @@ class InventoryReservationIntegrationTest
                 eventId,
                 "ORDER_ITEM_ADDED",
                 orderId,
+                orderItemId,
                 productId,
                 3
         );
@@ -107,6 +114,7 @@ class InventoryReservationIntegrationTest
                 eventId,
                 "ORDER_ITEM_ADDED",
                 orderId,
+                orderItemId,
                 productId,
                 3
         );
@@ -125,6 +133,7 @@ class InventoryReservationIntegrationTest
     void insufficientInventoryWritesReservationFailedOutboxEvent() {
         UUID eventId = UUID.randomUUID();
         UUID orderId = UUID.randomUUID();
+        UUID orderItemId = UUID.randomUUID();
         UUID productId = UUID.randomUUID();
 
         inventoryItemRepository.saveAndFlush(
@@ -135,6 +144,7 @@ class InventoryReservationIntegrationTest
                 eventId,
                 "ORDER_ITEM_ADDED",
                 orderId,
+                orderItemId,
                 productId,
                 3
         ));
@@ -164,6 +174,9 @@ class InventoryReservationIntegrationTest
                 "\"productId\":\"" + productId + "\""
         ));
         assertTrue(outboxEvent.getPayload().contains(
+                "\"orderItemId\":\"" + orderItemId + "\""
+        ));
+        assertTrue(outboxEvent.getPayload().contains(
                 "\"requestedQuantity\":3"
         ));
         assertTrue(outboxEvent.getPayload().contains(
@@ -175,12 +188,14 @@ class InventoryReservationIntegrationTest
     void unknownInventoryItemWritesReservationFailedOutboxEvent() {
         UUID eventId = UUID.randomUUID();
         UUID orderId = UUID.randomUUID();
+        UUID orderItemId = UUID.randomUUID();
         UUID productId = UUID.randomUUID();
 
         assertDoesNotThrow(() -> reservationService.reserve(
                 eventId,
                 "ORDER_ITEM_ADDED",
                 orderId,
+                orderItemId,
                 productId,
                 3
         ));
@@ -204,6 +219,7 @@ class InventoryReservationIntegrationTest
     void duplicateFailedEventWritesFailureOutboxEventOnlyOnce() {
         UUID eventId = UUID.randomUUID();
         UUID orderId = UUID.randomUUID();
+        UUID orderItemId = UUID.randomUUID();
         UUID productId = UUID.randomUUID();
 
         inventoryItemRepository.saveAndFlush(
@@ -214,6 +230,7 @@ class InventoryReservationIntegrationTest
                 eventId,
                 "ORDER_ITEM_ADDED",
                 orderId,
+                orderItemId,
                 productId,
                 3
         );
@@ -222,6 +239,7 @@ class InventoryReservationIntegrationTest
                 eventId,
                 "ORDER_ITEM_ADDED",
                 orderId,
+                orderItemId,
                 productId,
                 3
         );

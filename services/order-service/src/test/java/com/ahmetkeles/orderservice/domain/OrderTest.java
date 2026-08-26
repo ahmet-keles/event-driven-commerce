@@ -6,6 +6,7 @@ import java.math.BigDecimal;
 import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 class OrderTest {
@@ -70,20 +71,97 @@ class OrderTest {
     }
 
     @Test
-    void pendingOrderCanBeConfirmed() {
+    void singleItemOrderIsConfirmedOnceThatItemIsReserved() {
         Order order = new Order(UUID.randomUUID(), "USD");
+        OrderItem item = order.addItem(
+                UUID.randomUUID(), 2, new BigDecimal("15.00"));
 
-        order.confirm();
+        order.markItemReserved(item.getId());
 
         assertEquals(OrderStatus.CONFIRMED, order.getStatus());
     }
 
     @Test
-    void confirmingAlreadyConfirmedOrderIsIdempotent() {
+    void twoItemOrderStaysPendingAfterFirstReservation() {
+        Order order = new Order(UUID.randomUUID(), "USD");
+        OrderItem first = order.addItem(
+                UUID.randomUUID(), 1, new BigDecimal("10.00"));
+        order.addItem(UUID.randomUUID(), 1, new BigDecimal("20.00"));
+
+        order.markItemReserved(first.getId());
+
+        assertEquals(OrderStatus.PENDING, order.getStatus());
+    }
+
+    @Test
+    void twoItemOrderIsConfirmedAfterSecondReservation() {
+        Order order = new Order(UUID.randomUUID(), "USD");
+        OrderItem first = order.addItem(
+                UUID.randomUUID(), 1, new BigDecimal("10.00"));
+        OrderItem second = order.addItem(
+                UUID.randomUUID(), 1, new BigDecimal("20.00"));
+
+        order.markItemReserved(first.getId());
+        order.markItemReserved(second.getId());
+
+        assertEquals(OrderStatus.CONFIRMED, order.getStatus());
+    }
+
+    @Test
+    void duplicateReservationForSameItemDoesNotConfirmOrder() {
+        Order order = new Order(UUID.randomUUID(), "USD");
+        OrderItem first = order.addItem(
+                UUID.randomUUID(), 1, new BigDecimal("10.00"));
+        order.addItem(UUID.randomUUID(), 1, new BigDecimal("20.00"));
+
+        order.markItemReserved(first.getId());
+        order.markItemReserved(first.getId());
+        order.markItemReserved(first.getId());
+
+        assertEquals(OrderStatus.PENDING, order.getStatus());
+    }
+
+    @Test
+    void duplicateReservationForSameProductDoesNotConfirmOrder() {
+        UUID sharedProductId = UUID.randomUUID();
+        Order order = new Order(UUID.randomUUID(), "USD");
+        OrderItem first = order.addItem(
+                sharedProductId, 1, new BigDecimal("10.00"));
+        order.addItem(sharedProductId, 1, new BigDecimal("10.00"));
+
+        order.markItemReserved(first.getId());
+        order.markItemReserved(first.getId());
+
+        assertEquals(OrderStatus.PENDING, order.getStatus());
+    }
+
+    @Test
+    void reservationForUnknownItemDoesNotConfirmOrder() {
+        Order order = new Order(UUID.randomUUID(), "USD");
+        order.addItem(UUID.randomUUID(), 1, new BigDecimal("10.00"));
+
+        order.markItemReserved(UUID.randomUUID());
+
+        assertEquals(OrderStatus.PENDING, order.getStatus());
+    }
+
+    @Test
+    void orderWithoutItemsIsNotConfirmed() {
         Order order = new Order(UUID.randomUUID(), "USD");
 
-        order.confirm();
-        order.confirm();
+        order.markItemReserved(UUID.randomUUID());
+
+        assertEquals(OrderStatus.PENDING, order.getStatus());
+    }
+
+    @Test
+    void reservingAllItemsTwiceKeepsOrderConfirmed() {
+        Order order = new Order(UUID.randomUUID(), "USD");
+        OrderItem item = order.addItem(
+                UUID.randomUUID(), 1, new BigDecimal("10.00"));
+
+        order.markItemReserved(item.getId());
+        order.markItemReserved(item.getId());
 
         assertEquals(OrderStatus.CONFIRMED, order.getStatus());
     }
@@ -108,23 +186,60 @@ class OrderTest {
     }
 
     @Test
-    void confirmedOrderIsNotCancelled() {
+    void confirmedOrderIsNotCancelledByLateFailure() {
         Order order = new Order(UUID.randomUUID(), "USD");
+        OrderItem item = order.addItem(
+                UUID.randomUUID(), 1, new BigDecimal("10.00"));
 
-        order.confirm();
+        order.markItemReserved(item.getId());
         order.cancel();
 
         assertEquals(OrderStatus.CONFIRMED, order.getStatus());
     }
 
     @Test
-    void cancelledOrderIsNotConfirmed() {
+    void cancelledOrderIsNotConfirmedByLateReservation() {
         Order order = new Order(UUID.randomUUID(), "USD");
+        OrderItem item = order.addItem(
+                UUID.randomUUID(), 1, new BigDecimal("10.00"));
 
         order.cancel();
-        order.confirm();
+        order.markItemReserved(item.getId());
 
         assertEquals(OrderStatus.CANCELLED, order.getStatus());
+    }
+
+    @Test
+    void partiallyReservedOrderIsCancelledByFailure() {
+        Order order = new Order(UUID.randomUUID(), "USD");
+        OrderItem first = order.addItem(
+                UUID.randomUUID(), 1, new BigDecimal("10.00"));
+        order.addItem(UUID.randomUUID(), 1, new BigDecimal("20.00"));
+
+        order.markItemReserved(first.getId());
+        order.cancel();
+
+        assertEquals(OrderStatus.CANCELLED, order.getStatus());
+    }
+
+    @Test
+    void cancelledOrderDoesNotRecordFurtherItemReservations() {
+        Order order = new Order(UUID.randomUUID(), "USD");
+        OrderItem first = order.addItem(
+                UUID.randomUUID(), 1, new BigDecimal("10.00"));
+        OrderItem second = order.addItem(
+                UUID.randomUUID(), 1, new BigDecimal("20.00"));
+
+        order.markItemReserved(first.getId());
+        order.cancel();
+        order.markItemReserved(second.getId());
+
+        assertEquals(OrderStatus.CANCELLED, order.getStatus());
+        assertFalse(order.getItems().stream()
+                .filter(item -> item.getId().equals(second.getId()))
+                .findFirst()
+                .orElseThrow()
+                .isReserved());
     }
 
     @Test

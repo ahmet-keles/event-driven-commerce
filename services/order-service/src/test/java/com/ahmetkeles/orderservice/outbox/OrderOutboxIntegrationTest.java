@@ -98,6 +98,15 @@ class OrderOutboxIntegrationTest extends PostgreSQLIntegrationTest {
 
         assertEquals(order.getId().toString(), payload.get("orderId").asText());
         assertEquals(productId.toString(), payload.get("productId").asText());
+        assertEquals(
+                orderRepository.findWithItemsById(order.getId())
+                        .orElseThrow()
+                        .getItems()
+                        .getFirst()
+                        .getId()
+                        .toString(),
+                payload.get("orderItemId").asText()
+        );
         assertEquals(2, payload.get("quantity").asInt());
         assertEquals("15.0", payload.get("unitPrice").asText());
         assertEquals("30.0", payload.get("totalAmount").asText());

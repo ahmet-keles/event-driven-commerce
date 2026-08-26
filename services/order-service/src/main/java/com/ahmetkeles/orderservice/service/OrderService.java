@@ -1,6 +1,7 @@
 package com.ahmetkeles.orderservice.service;
 
 import com.ahmetkeles.orderservice.domain.Order;
+import com.ahmetkeles.orderservice.domain.OrderItem;
 import com.ahmetkeles.orderservice.outbox.OutboxEvent;
 import com.ahmetkeles.orderservice.outbox.OutboxEventRepository;
 import com.ahmetkeles.orderservice.outbox.event.OrderCreatedEvent;
@@ -61,9 +62,9 @@ public class OrderService {
     }
 
     @Transactional
-    public void confirmOrder(UUID orderId) {
+    public void markItemReserved(UUID orderId, UUID orderItemId) {
         Order order = findOrderWithItems(orderId);
-        order.confirm();
+        order.markItemReserved(orderItemId);
     }
 
     @Transactional
@@ -80,10 +81,11 @@ public class OrderService {
             BigDecimal unitPrice
     ) {
         Order order = findOrderWithItems(orderId);
-        order.addItem(productId, quantity, unitPrice);
+        OrderItem item = order.addItem(productId, quantity, unitPrice);
 
         OrderItemAddedEvent event = new OrderItemAddedEvent(
                 order.getId(),
+                item.getId(),
                 productId,
                 quantity,
                 unitPrice,

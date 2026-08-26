@@ -183,9 +183,12 @@ class KafkaInventoryIntegrationTest {
             UUID productId,
             int quantity
     ) throws Exception {
+        UUID orderItemId = UUID.randomUUID();
+
         String payload = objectMapper.writeValueAsString(
                 new OrderItemAddedEvent(
                         orderId,
+                        orderItemId,
                         productId,
                         quantity,
                         new BigDecimal("12.50"),

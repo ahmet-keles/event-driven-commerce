@@ -50,6 +50,7 @@ public class InventoryReservationService {
             UUID eventId,
             String eventType,
             UUID orderId,
+            UUID orderItemId,
             UUID productId,
             int quantity
     ) {
@@ -69,6 +70,7 @@ public class InventoryReservationService {
                     eventId,
                     eventType,
                     orderId,
+                    orderItemId,
                     productId,
                     quantity,
                     INVENTORY_ITEM_NOT_FOUND
@@ -80,6 +82,7 @@ public class InventoryReservationService {
                     eventId,
                     eventType,
                     orderId,
+                    orderItemId,
                     productId,
                     quantity,
                     INSUFFICIENT_INVENTORY
@@ -95,6 +98,7 @@ public class InventoryReservationService {
         InventoryReservedEvent event =
                 new InventoryReservedEvent(
                         orderId,
+                        orderItemId,
                         productId,
                         quantity
                 );
@@ -113,6 +117,7 @@ public class InventoryReservationService {
             UUID eventId,
             String eventType,
             UUID orderId,
+            UUID orderItemId,
             UUID productId,
             int quantity,
             String reason
@@ -132,6 +137,7 @@ public class InventoryReservationService {
         InventoryReservationFailedEvent event =
                 new InventoryReservationFailedEvent(
                         orderId,
+                        orderItemId,
                         productId,
                         quantity,
                         reason

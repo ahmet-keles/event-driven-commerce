@@ -58,21 +58,42 @@ public class Order {
         this.updatedAt = Instant.now();
     }
 
-    public void addItem(UUID productId, int quantity, BigDecimal unitPrice) {
+    public OrderItem addItem(UUID productId, int quantity, BigDecimal unitPrice) {
         OrderItem item = new OrderItem(productId, quantity, unitPrice, this);
 
         items.add(item);
         totalAmount = totalAmount.add(item.subtotal());
         updatedAt = Instant.now();
+
+        return item;
     }
 
-    public void confirm() {
+    /**
+     * Records that one item of this order has been reserved, confirming the
+     * order only once every item is reserved. Reservation state is tracked per
+     * item rather than as a count, so a redelivered event for an item that is
+     * already reserved cannot advance the order towards confirmation.
+     */
+    public void markItemReserved(UUID orderItemId) {
         if (status != OrderStatus.PENDING) {
             return;
         }
 
-        status = OrderStatus.CONFIRMED;
+        items.stream()
+                .filter(item -> item.getId().equals(orderItemId))
+                .findFirst()
+                .ifPresent(OrderItem::markReserved);
+
         updatedAt = Instant.now();
+
+        if (allItemsReserved()) {
+            status = OrderStatus.CONFIRMED;
+        }
+    }
+
+    private boolean allItemsReserved() {
+        return !items.isEmpty()
+                && items.stream().allMatch(OrderItem::isReserved);
     }
 
     public void cancel() {

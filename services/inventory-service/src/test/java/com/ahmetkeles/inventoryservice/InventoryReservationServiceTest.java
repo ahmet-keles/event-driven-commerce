@@ -44,6 +44,7 @@ class InventoryReservationServiceTest {
 
     private final UUID eventId = UUID.randomUUID();
     private final UUID orderId = UUID.randomUUID();
+    private final UUID orderItemId = UUID.randomUUID();
     private final UUID productId = UUID.randomUUID();
 
     @Test
@@ -59,6 +60,7 @@ class InventoryReservationServiceTest {
                 eventId,
                 "ORDER_ITEM_ADDED",
                 orderId,
+                orderItemId,
                 productId,
                 3
         ));
@@ -95,6 +97,7 @@ class InventoryReservationServiceTest {
                 eventId,
                 "ORDER_ITEM_ADDED",
                 orderId,
+                orderItemId,
                 productId,
                 3
         ));
@@ -122,6 +125,7 @@ class InventoryReservationServiceTest {
                 eventId,
                 "ORDER_ITEM_ADDED",
                 orderId,
+                orderItemId,
                 productId,
                 3
         );
@@ -146,6 +150,7 @@ class InventoryReservationServiceTest {
                 eventId,
                 "ORDER_ITEM_ADDED",
                 orderId,
+                orderItemId,
                 productId,
                 3
         );
