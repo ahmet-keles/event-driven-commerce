@@ -86,11 +86,15 @@ inspecting state, are in [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
 
 ```bash
 cp .env.example .env          # then fill in your local values
-docker compose up -d --wait   # postgres (5433), inventory-postgres (5434), kafka (29092)
+docker compose up -d --wait   # postgres, inventory-postgres, kafka
 ```
 
 `--wait` returns once all three containers report healthy. Data lives in named
 volumes and survives `docker compose down`; use `down -v` to wipe it.
+
+The databases publish on `POSTGRES_PORT` (default `5433`) and
+`INVENTORY_POSTGRES_PORT` (default `5434`), which set the host port and the
+service's JDBC URL together; Kafka's external listener is on `29092`.
 
 ### Run Order Service
 
