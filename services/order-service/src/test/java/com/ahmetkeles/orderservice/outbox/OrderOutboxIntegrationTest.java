@@ -163,6 +163,7 @@ class OrderOutboxIntegrationTest extends PostgreSQLIntegrationTest {
     @Test
     void cancellationRollsBackWithItsOutboxEventWhenOutboxWriteFails() {
         Order order = orderService.createOrder(UUID.randomUUID(), "USD");
+        outboxEventRepository.deleteAll();
 
         jdbcTemplate.execute(
                 "ALTER TABLE outbox_events " +
