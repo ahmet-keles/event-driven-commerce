@@ -63,10 +63,12 @@ mechanics.
 | PostgreSQL (payment) | `postgres:17-alpine` | `localhost:${PAYMENT_POSTGRES_PORT:-5435}` | Compose service `payment-postgres`; `pg_isready` healthcheck |
 | Kafka | `apache/kafka:4.0.0` | `localhost:29092` | Compose service `kafka`, single-node KRaft (broker + controller), 3 default partitions, broker-API healthcheck |
 
-All Compose services join one bridge network, use `restart: unless-stopped`,
-and (payment-service excepted — it deliberately exposes nothing to probe)
-declare healthchecks, so `docker compose up -d --wait` returns only once the
-stack is actually ready. See
+All Compose services join one bridge network and use
+`restart: unless-stopped`. The databases and Kafka declare healthchecks;
+payment-service deliberately does not (it exposes nothing to probe), so
+`docker compose up -d --wait` returns once those healthchecks pass and the
+payment-service container is running — its Spring application's readiness is
+confirmed from its logs, not by `--wait`. See
 [DEVELOPMENT.md](DEVELOPMENT.md#2-start-the-infrastructure).
 
 All three services are built on the Spring Boot `4.1.1` parent with

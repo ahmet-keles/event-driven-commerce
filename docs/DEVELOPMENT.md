@@ -9,7 +9,7 @@ shared infrastructure.
 
 | Requirement | Why |
 |---|---|
-| **Java 21** | Both `pom.xml` files set `<java.version>21</java.version>` and inherit the Spring Boot `4.1.1` parent, whose baseline is Java 21. The build will not run on an older JDK. |
+| **Java 21** | All three services' `pom.xml` files set `<java.version>21</java.version>` and inherit the Spring Boot `4.1.1` parent, whose baseline is Java 21. The build will not run on an older JDK. |
 | **Docker** (Docker Desktop, Colima, or any Docker-API-compatible engine) | Runs PostgreSQL and Kafka locally via Compose, **and** is required for the test suites — the integration tests use Testcontainers and start real containers. |
 | **Git** | Source control. |
 
@@ -80,10 +80,14 @@ container port and the service's JDBC URL, keeping them in step.
 docker compose up -d --wait
 ```
 
-`--wait` blocks until every container reports healthy, so the services you start
-next never race a database that is still running `initdb`. That starts the
-containers below on the `commerce-net` bridge network, all with
-`restart: unless-stopped`:
+`--wait` blocks until the three PostgreSQL containers and Kafka pass their
+healthchecks and the payment-service container is **running** — payment-service
+deliberately has no healthcheck (it exposes no HTTP surface to probe), so
+`--wait` does **not** prove its Spring application is ready. The databases you
+connect to next never race `initdb`; for payment-service, confirm readiness
+with `docker compose logs -f payment-service` and wait for
+`Started PaymentServiceApplication`. The command starts the containers below on
+the `commerce-net` bridge network, all with `restart: unless-stopped`:
 
 | Compose service | Container | Host port | Healthcheck |
 |---|---|---|---|
@@ -345,14 +349,14 @@ targeting `main`:
 
 - A matrix job per service (`inventory-service`, `order-service`,
   `payment-service`) on
-  `ubuntu-latest`, with `fail-fast: false` so both results are always reported —
-  the workflow still fails if either service fails.
-- An independent `e2e` job that builds both boot jars and runs the
+  `ubuntu-latest`, with `fail-fast: false` so every service's result is
+  reported — the workflow still fails if any service fails.
+- An independent `e2e` job that builds all three boot jars and runs the
   cross-service suite in `integration-tests/`.
 - `actions/setup-java@v4` with the Temurin distribution, `java-version: '21'`,
   and a per-job Maven cache: each matrix leg keys on its own service's
-  `pom.xml`, and the `e2e` job keys on all three `pom.xml` files since it
-  builds both services and the e2e module. Cache entries are immutable per
+  `pom.xml`, and the `e2e` job keys on the `pom.xml` files of everything it
+  builds — the three services and the e2e module. Cache entries are immutable per
   key, so jobs that run in parallel deliberately do not share a key.
 - `.github/scripts/prepare-docker.sh` before the tests: fails fast with a
   readable error when the Docker daemon is unusable, logs the daemon's version
@@ -367,8 +371,8 @@ No further Docker setup is needed: `ubuntu-latest` runners ship with a running
 Docker daemon, which is all Testcontainers requires to start the PostgreSQL and
 Kafka containers. CI does **not** use `compose.yaml` or `.env`.
 
-Because CI runs exactly the local command, a green `./mvnw test` in both service
-directories is a reliable predictor of a green pipeline.
+Because CI runs exactly the local command, a green `./mvnw test` in each
+service directory is a reliable predictor of a green pipeline.
 
 ## Building without tests
 
@@ -377,4 +381,4 @@ cd services/order-service && ./mvnw -DskipTests package
 ```
 
 Produces an executable jar in `target/`. Each service must be built separately;
-there is no parent POM that builds both.
+there is no parent POM that builds them all.

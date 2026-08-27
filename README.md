@@ -102,10 +102,11 @@ cp .env.example .env          # then fill in your local values
 docker compose up -d --wait   # three databases, kafka, payment-service
 ```
 
-`--wait` returns once every container is up and each healthcheck passes (the
-payment-service container is built from `services/payment-service/Dockerfile`
-on first use). Data lives in named volumes and survives
-`docker compose down`; use `down -v` to wipe it.
+`--wait` returns once the database and Kafka healthchecks pass and the
+payment-service container is running (it has no healthcheck by design — watch
+its logs for application readiness; the container is built from
+`services/payment-service/Dockerfile` on first use). Data lives in named
+volumes and survives `docker compose down`; use `down -v` to wipe it.
 
 The databases publish on `POSTGRES_PORT` (default `5433`),
 `INVENTORY_POSTGRES_PORT` (default `5434`), and `PAYMENT_POSTGRES_PORT`
@@ -173,6 +174,9 @@ push to `main` and every pull request.
 
 ## Project Status
 
-v1.0 — the order → inventory → payment saga is complete, tested end to end,
-and running locally under Docker Compose. Natural next steps: a notification
-service, metrics/tracing beyond Actuator health, and cloud deployment.
+v1.0 — the order → inventory → payment saga is complete and tested end to
+end. Local deployment is hybrid: Docker Compose runs Kafka, the three
+PostgreSQL databases, and payment-service, while order-service and
+inventory-service run on the host via `./mvnw spring-boot:run`. Natural next
+steps: a notification service, metrics/tracing beyond Actuator health, and
+cloud deployment.
