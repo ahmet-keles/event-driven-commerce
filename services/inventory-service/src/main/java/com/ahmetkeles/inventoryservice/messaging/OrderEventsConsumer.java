@@ -26,44 +26,53 @@ public class OrderEventsConsumer {
         this.inventoryReservationService = inventoryReservationService;
     }
 
+    /**
+     * Failures propagate to the container's error handler with their original
+     * type so it can classify them: contract violations are wrapped in
+     * {@link InvalidEventException} (non-retryable), while exceptions from the
+     * reservation service — including transient database errors — are not
+     * wrapped at all.
+     */
     @KafkaListener(topics = "${app.kafka.order-events-topic}")
     public void consume(String message) {
+        OrderEventEnvelope envelope =
+                parse(message, OrderEventEnvelope.class, "order event envelope");
+
+        if (!ORDER_ITEM_ADDED.equals(envelope.eventType())) {
+            return;
+        }
+
+        OrderItemAddedEvent event =
+                parse(
+                        envelope.payload(),
+                        OrderItemAddedEvent.class,
+                        ORDER_ITEM_ADDED + " payload"
+                );
+
+        inventoryReservationService.reserve(
+                envelope.eventId(),
+                envelope.eventType(),
+                event.orderId(),
+                event.orderItemId(),
+                event.productId(),
+                event.quantity()
+        );
+
+        log.info(
+                "Processed inventory reservation for order {}, item {}, product {}, quantity {}",
+                event.orderId(),
+                event.orderItemId(),
+                event.productId(),
+                event.quantity()
+        );
+    }
+
+    private <T> T parse(String json, Class<T> type, String description) {
         try {
-            OrderEventEnvelope envelope =
-                    objectMapper.readValue(
-                            message,
-                            OrderEventEnvelope.class
-                    );
-
-            if (!ORDER_ITEM_ADDED.equals(envelope.eventType())) {
-                return;
-            }
-
-            OrderItemAddedEvent event =
-                    objectMapper.readValue(
-                            envelope.payload(),
-                            OrderItemAddedEvent.class
-                    );
-
-            inventoryReservationService.reserve(
-                    envelope.eventId(),
-                    envelope.eventType(),
-                    event.orderId(),
-                    event.orderItemId(),
-                    event.productId(),
-                    event.quantity()
-            );
-
-            log.info(
-                    "Processed inventory reservation for order {}, item {}, product {}, quantity {}",
-                    event.orderId(),
-                    event.orderItemId(),
-                    event.productId(),
-                    event.quantity()
-            );
-        } catch (Exception exception) {
-            throw new IllegalStateException(
-                    "Failed to process order event",
+            return objectMapper.readValue(json, type);
+        } catch (RuntimeException exception) {
+            throw new InvalidEventException(
+                    "Malformed " + description,
                     exception
             );
         }
