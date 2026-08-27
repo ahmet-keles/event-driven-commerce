@@ -7,6 +7,7 @@ import jakarta.persistence.Enumerated;
 import jakarta.persistence.Id;
 import jakarta.persistence.OneToMany;
 import jakarta.persistence.Table;
+import jakarta.persistence.Version;
 
 import java.math.BigDecimal;
 import java.time.Instant;
@@ -33,6 +34,16 @@ public class Order {
     private Instant createdAt;
 
     private Instant updatedAt;
+
+    /**
+     * Optimistic-locking version for the aggregate root. Wrapper {@code Long}
+     * rather than primitive {@code long}: a new instance carries {@code null},
+     * which lets Spring Data treat an unsaved entity with an assigned UUID id
+     * as new (persist, no merge round-trip) and lets Hibernate distinguish
+     * "never persisted" from "version 0".
+     */
+    @Version
+    private Long version;
 
     @OneToMany(mappedBy = "order", cascade = CascadeType.ALL, orphanRemoval = true)
     private List<OrderItem> items = new ArrayList<>();
@@ -141,6 +152,10 @@ public class Order {
 
     public Instant getUpdatedAt() {
         return updatedAt;
+    }
+
+    public Long getVersion() {
+        return version;
     }
 
     public List<OrderItem> getItems() {
