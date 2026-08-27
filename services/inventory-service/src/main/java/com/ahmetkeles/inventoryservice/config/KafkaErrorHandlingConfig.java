@@ -110,13 +110,14 @@ public class KafkaErrorHandlingConfig {
     }
 
     /**
-     * Dead-letter topic for the order events this service consumes. Guarded by
-     * the same property as the other topic definitions so tests that run without
-     * a broker do not attempt topic creation.
+     * Dead-letter topic for the order events this service consumes. The topic
+     * is written by the consumer's error handler, so its creation tracks
+     * whether the listeners run — not the outbox publisher flag. Contexts that
+     * run without a broker disable listener auto-startup and skip it.
      */
     @Bean
     @ConditionalOnProperty(
-            name = "app.outbox.publisher-enabled",
+            name = "spring.kafka.listener.auto-startup",
             havingValue = "true",
             matchIfMissing = true
     )

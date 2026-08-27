@@ -79,10 +79,12 @@ class KafkaDeadLetterIntegrationTest {
         try (AdminClient admin = AdminClient.create(
                 Map.of("bootstrap.servers", kafka.getBootstrapServers())
         )) {
+            // inventory.events.DLT is not created here: the service itself
+            // declares it as a NewTopic bean and KafkaAdmin creates it on
+            // context startup.
             admin.createTopics(
                     List.of(
                             new NewTopic(INVENTORY_EVENTS_TOPIC, 3, (short) 1),
-                            new NewTopic(INVENTORY_EVENTS_DLT, 1, (short) 1),
                             new NewTopic(RETRY_TEST_TOPIC, 1, (short) 1),
                             new NewTopic(RETRY_TEST_DLT, 1, (short) 1)
                     )
