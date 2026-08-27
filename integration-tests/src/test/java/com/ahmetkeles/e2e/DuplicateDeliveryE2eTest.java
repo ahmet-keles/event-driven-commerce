@@ -155,6 +155,14 @@ class DuplicateDeliveryE2eTest {
 
         assertEquals(1, orderDb.processedEventCount(reservedEventId),
                 "original delivery claims exactly one ledger row");
+
+        // With the real payment service in the stack, confirmation opens an
+        // async payment leg whose completion bumps updated_at. Snapshot only
+        // after that leg settles, so the frozen-updated_at assertion below
+        // stays deterministic.
+        await().atMost(WAIT).untilAsserted(() -> assertEquals("COMPLETED",
+                orderDb.orderPaymentStatus(orderId).orElse(null)));
+
         Instant updatedAtAfterConfirm =
                 orderDb.orderUpdatedAt(orderId).orElseThrow();
 
@@ -241,6 +249,14 @@ class DuplicateDeliveryE2eTest {
                         .orElseThrow().publishedAt()));
 
         assertEquals(1, orderDb.processedEventCount(reservedRow.id()));
+
+        // With the real payment service in the stack, confirmation opens an
+        // async payment leg whose completion bumps updated_at. Snapshot only
+        // after that leg settles, so the frozen-updated_at assertion below
+        // stays deterministic.
+        await().atMost(WAIT).untilAsserted(() -> assertEquals("COMPLETED",
+                orderDb.orderPaymentStatus(orderId).orElse(null)));
+
         Instant updatedAtBefore =
                 orderDb.orderUpdatedAt(orderId).orElseThrow();
 

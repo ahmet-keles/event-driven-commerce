@@ -20,20 +20,22 @@ engine that works for the service suites — Docker 29+ included — works here,
 with no `DOCKER_API_VERSION` overrides.
 
 ```bash
-# 1. Build both service jars (skip their tests if you only want e2e)
+# 1. Build the service jars (skip their tests if you only want e2e)
 (cd ../services/order-service && ./mvnw -DskipTests package)
 (cd ../services/inventory-service && ./mvnw -DskipTests package)
+(cd ../services/payment-service && ./mvnw -DskipTests package)
 
 # 2. Run the suite
 ./mvnw test
 ```
 
 The newest jar in each service's `target/` is used. Override with
-`-De2e.order-service.jar=…` / `-De2e.inventory-service.jar=…`.
+`-De2e.order-service.jar=…` / `-De2e.inventory-service.jar=…` /
+`-De2e.payment-service.jar=…`.
 
 ## Topology
 
-Five functional containers per run (plus Testcontainers' Ryuk reaper), on one
+Seven functional containers per run (plus Testcontainers' Ryuk reaper), on one
 throwaway Docker network:
 
 | Container | Image | Role |
@@ -43,8 +45,11 @@ throwaway Docker network:
 | `inventory-db` | `postgres:17-alpine` | inventory-service database |
 | `order-service` | `eclipse-temurin:21-jre` + boot jar | real app; REST + health on mapped 8080 |
 | `inventory-service` | `eclipse-temurin:21-jre` + boot jar | real app; no HTTP by design |
+| `payment-db` | `postgres:17-alpine` | payment-service database |
+| `payment-service` | `eclipse-temurin:21-jre` + boot jar | real app; no HTTP by design; SIMULATED gateway (amounts >= 1000.00 decline, below approve) |
 
-The harness pre-creates `order.events` and `inventory.events` (3 partitions,
+The harness pre-creates `order.events`, `inventory.events`, and
+`payment.events` (3 partitions,
 as in production) before either app starts, because neither service creates
 the topic it consumes from. The `.DLT` dead-letter topics are declared by the
 services themselves and appear at app startup; nothing in this suite produces
@@ -53,8 +58,8 @@ to them — dead-letter scenarios belong to the retry/DLT test group.
 ## Readiness
 
 - order-service: HTTP 200 from `/actuator/health` (it already ships Actuator).
-- inventory-service: the `Started InventoryServiceApplication` log line — it
-  has no web server, and none is added just for tests.
+- inventory-service and payment-service: their `Started …Application` log
+  lines — they have no web servers, and none are added just for tests.
 - Both: a best-effort AdminClient barrier waits until each service's consumer
   group has a partition assignment, so the first test doesn't pay for the
   initial rebalance. Correctness never depends on the barrier — both consumers
@@ -70,8 +75,12 @@ Injected via environment variables only — no service code or config changes:
   after the consumer idempotency ledger landed — a fresh production consumer
   group would skip history. Flagged as a standalone config gap; the harness
   papers over it for tests only.
-- `APP_OUTBOX_PUBLISH_INTERVAL_MS=100` for both services, so saga hops
+- `APP_OUTBOX_PUBLISH_INTERVAL_MS=100` for all three services, so saga hops
   complete quickly.
+
+Payment outcomes are driven through the simulated gateway's documented
+contract, not by configuration overrides: order totals below 1000.00 approve,
+totals at or above it decline.
 
 ## Test isolation
 
@@ -86,8 +95,9 @@ Injected via environment variables only — no service code or config changes:
 ## Golden wire-contract fixtures
 
 `src/test/resources/fixtures/` holds one canonical envelope per event type
-(`ORDER_CREATED`, `ORDER_ITEM_ADDED`, `INVENTORY_RESERVED`,
-`INVENTORY_RESERVATION_FAILED`). The contract test compares what each service
+(`ORDER_CREATED`, `ORDER_ITEM_ADDED`, `ORDER_CONFIRMED`, `ORDER_CANCELLED`,
+`INVENTORY_RESERVED`, `INVENTORY_RESERVATION_FAILED`, `PAYMENT_COMPLETED`,
+`PAYMENT_FAILED`). The contract test compares what each service
 really publishes against these files (field names always; values where they
 aren't identities), and produces retargeted copies onto the real topics to
 prove the consumers accept the documented shape. The envelope and payload
