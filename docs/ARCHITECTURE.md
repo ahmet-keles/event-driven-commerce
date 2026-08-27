@@ -230,6 +230,9 @@ into a completed shipment — there is no downstream step yet.
 - **Consumer idempotency** in inventory-service via `processed_events`, keyed by
   the envelope `eventId`.
 - **Optimistic locking** on `inventory_items` via `@Version`.
+- **Bounded retention** in inventory-service for published outbox rows and
+  `processed_events`, batch-limited and multi-replica safe — see
+  [EVENT_FLOW.md](EVENT_FLOW.md#retention-inventory-service).
 - **Flyway migrations** with `ddl-auto=validate` in both services.
 - **Reservation-failure events** that drive order cancellation, closing the
   success and failure sides of the loop.

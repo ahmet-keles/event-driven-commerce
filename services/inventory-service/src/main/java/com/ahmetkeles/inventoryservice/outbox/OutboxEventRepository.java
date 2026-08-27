@@ -1,11 +1,13 @@
 package com.ahmetkeles.inventoryservice.outbox;
 
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Instant;
 import java.util.Collection;
 import java.util.List;
 import java.util.UUID;
@@ -81,5 +83,44 @@ public interface OutboxEventRepository
     )
     List<UUID> findOldestPendingEventIds(
             @Param("aggregateIds") Collection<UUID> aggregateIds
+    );
+
+    /**
+     * Deletes one bounded batch of <em>published</em> outbox rows whose
+     * {@code published_at} is older than the cutoff, returning how many rows
+     * went. Unpublished rows ({@code published_at IS NULL}) are structurally
+     * out of reach: the predicate requires a non-null {@code published_at},
+     * so no configuration of age or batch size can ever delete an event that
+     * has not been acknowledged by the broker.
+     *
+     * <p>{@code LIMIT} bounds every statement, and {@code FOR UPDATE SKIP
+     * LOCKED} makes concurrent replicas partition the eligible rows between
+     * themselves instead of lock-waiting. The publisher's claim query locks
+     * only unpublished rows, so retention and publishing never contend for
+     * the same row.
+     *
+     * <p>{@code REQUIRES_NEW} gives each batch its own short transaction, so
+     * row locks never accumulate across batches of one cleanup run.
+     */
+    @Modifying
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    @Query(
+            value = """
+                    DELETE FROM outbox_events
+                    WHERE id IN (
+                        SELECT id
+                        FROM outbox_events
+                        WHERE published_at IS NOT NULL
+                          AND published_at < :cutoff
+                        ORDER BY published_at ASC, id ASC
+                        LIMIT :batchSize
+                        FOR UPDATE SKIP LOCKED
+                    )
+                    """,
+            nativeQuery = true
+    )
+    int deletePublishedBatchOlderThan(
+            @Param("cutoff") Instant cutoff,
+            @Param("batchSize") int batchSize
     );
 }
