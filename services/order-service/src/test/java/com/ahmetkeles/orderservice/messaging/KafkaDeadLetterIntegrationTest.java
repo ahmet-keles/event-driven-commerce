@@ -2,6 +2,7 @@ package com.ahmetkeles.orderservice.messaging;
 
 import com.ahmetkeles.orderservice.OrderServiceApplication;
 import com.ahmetkeles.orderservice.domain.Order;
+import com.ahmetkeles.orderservice.domain.OrderItem;
 import com.ahmetkeles.orderservice.domain.OrderStatus;
 import com.ahmetkeles.orderservice.service.OrderService;
 import org.apache.kafka.clients.admin.AdminClient;
@@ -27,6 +28,7 @@ import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.kafka.KafkaContainer;
 import tools.jackson.databind.ObjectMapper;
 
+import java.math.BigDecimal;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -261,9 +263,9 @@ class KafkaDeadLetterIntegrationTest {
         assertNotNull(deadLetter, "malformed record must be dead-lettered");
 
         // The real consumer must still process the next, valid record.
-        Order order = orderService.createOrder(UUID.randomUUID(), "USD");
+        Order order = createOrderWithItem();
 
-        sendInventoryReserved(order.getId());
+        sendInventoryReserved(order);
 
         awaitTrue(
                 () -> orderService.getOrder(order.getId()).getStatus()
@@ -275,9 +277,9 @@ class KafkaDeadLetterIntegrationTest {
 
     @Test
     void successfulEventDoesNotReachDeadLetter() throws Exception {
-        Order order = orderService.createOrder(UUID.randomUUID(), "USD");
+        Order order = createOrderWithItem();
 
-        sendInventoryReserved(order.getId());
+        sendInventoryReserved(order);
 
         awaitTrue(
                 () -> orderService.getOrder(order.getId()).getStatus()
@@ -297,7 +299,8 @@ class KafkaDeadLetterIntegrationTest {
 
     @Test
     void reservationFailureIsBusinessOutcomeNotDeadLetter() throws Exception {
-        Order order = orderService.createOrder(UUID.randomUUID(), "USD");
+        Order order = createOrderWithItem();
+        OrderItem item = order.getItems().get(0);
 
         sendInventoryEvent(
                 order.getId(),
@@ -305,7 +308,8 @@ class KafkaDeadLetterIntegrationTest {
                 objectMapper.writeValueAsString(
                         new InventoryReservationFailedEvent(
                                 order.getId(),
-                                UUID.randomUUID(),
+                                item.getId(),
+                                item.getProductId(),
                                 5,
                                 "INSUFFICIENT_INVENTORY"
                         )
@@ -416,15 +420,30 @@ class KafkaDeadLetterIntegrationTest {
         );
     }
 
-    private void sendInventoryReserved(UUID orderId) throws Exception {
+    /** Creates an order carrying one real item, so item-level reservation events can target it. */
+    private Order createOrderWithItem() {
+        Order order = orderService.createOrder(UUID.randomUUID(), "USD");
+
+        return orderService.addItem(
+                order.getId(),
+                UUID.randomUUID(),
+                3,
+                new BigDecimal("12.50")
+        );
+    }
+
+    private void sendInventoryReserved(Order order) throws Exception {
+        OrderItem item = order.getItems().get(0);
+
         sendInventoryEvent(
-                orderId,
+                order.getId(),
                 "INVENTORY_RESERVED",
                 objectMapper.writeValueAsString(
                         new InventoryReservedEvent(
-                                orderId,
-                                UUID.randomUUID(),
-                                3
+                                order.getId(),
+                                item.getId(),
+                                item.getProductId(),
+                                item.getQuantity()
                         )
                 )
         );

@@ -451,6 +451,7 @@ class KafkaDeadLetterIntegrationTest {
         String payload = objectMapper.writeValueAsString(
                 new OrderItemAddedEvent(
                         orderId,
+                        UUID.randomUUID(),
                         productId,
                         quantity,
                         new BigDecimal("12.50"),
