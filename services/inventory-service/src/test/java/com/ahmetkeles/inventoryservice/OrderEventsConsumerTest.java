@@ -30,11 +30,13 @@ class OrderEventsConsumerTest {
     void processesOrderItemAddedEvent() throws Exception {
         UUID eventId = UUID.randomUUID();
         UUID orderId = UUID.randomUUID();
+        UUID orderItemId = UUID.randomUUID();
         UUID productId = UUID.randomUUID();
 
         String payload = objectMapper.writeValueAsString(
                 new OrderItemAddedEvent(
                         orderId,
+                        orderItemId,
                         productId,
                         3,
                         new BigDecimal("12.50"),
@@ -59,6 +61,7 @@ class OrderEventsConsumerTest {
                 eventId,
                 "ORDER_ITEM_ADDED",
                 orderId,
+                orderItemId,
                 productId,
                 3
         );

@@ -58,21 +58,52 @@ public class Order {
         this.updatedAt = Instant.now();
     }
 
-    public void addItem(UUID productId, int quantity, BigDecimal unitPrice) {
+    public OrderItem addItem(UUID productId, int quantity, BigDecimal unitPrice) {
         OrderItem item = new OrderItem(productId, quantity, unitPrice, this);
 
         items.add(item);
         totalAmount = totalAmount.add(item.subtotal());
         updatedAt = Instant.now();
+
+        return item;
     }
 
-    public void confirm() {
+    /**
+     * Records that one item of this order has been reserved, confirming the
+     * order only once every item is reserved. Reservation state is tracked per
+     * item rather than as a count, so a redelivered event for an item that is
+     * already reserved cannot advance the order towards confirmation.
+     *
+     * <p>The aggregate is only mutated when a previously-unreserved matching
+     * item is newly marked: a terminal order, an unknown or null item id, and
+     * an already-reserved item all leave the order untouched, including
+     * {@code updatedAt}.
+     */
+    public void markItemReserved(UUID orderItemId) {
         if (status != OrderStatus.PENDING) {
             return;
         }
 
-        status = OrderStatus.CONFIRMED;
+        OrderItem match = items.stream()
+                .filter(item -> item.getId().equals(orderItemId))
+                .findFirst()
+                .orElse(null);
+
+        if (match == null || match.isReserved()) {
+            return;
+        }
+
+        match.markReserved();
         updatedAt = Instant.now();
+
+        if (allItemsReserved()) {
+            status = OrderStatus.CONFIRMED;
+        }
+    }
+
+    private boolean allItemsReserved() {
+        return !items.isEmpty()
+                && items.stream().allMatch(OrderItem::isReserved);
     }
 
     public void cancel() {

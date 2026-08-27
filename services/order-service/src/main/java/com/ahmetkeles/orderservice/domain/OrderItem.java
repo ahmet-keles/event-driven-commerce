@@ -23,6 +23,8 @@ public class OrderItem {
 
     private BigDecimal unitPrice;
 
+    private boolean reserved;
+
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "order_id", nullable = false)
     private Order order;
@@ -52,11 +54,20 @@ public class OrderItem {
         this.productId = productId;
         this.quantity = quantity;
         this.unitPrice = unitPrice;
+        this.reserved = false;
         this.order = order;
     }
 
     public BigDecimal subtotal() {
         return unitPrice.multiply(BigDecimal.valueOf(quantity));
+    }
+
+    public void markReserved() {
+        reserved = true;
+    }
+
+    public boolean isReserved() {
+        return reserved;
     }
 
     public UUID getId() {

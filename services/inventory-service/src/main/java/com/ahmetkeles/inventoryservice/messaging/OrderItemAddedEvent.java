@@ -5,6 +5,7 @@ import java.util.UUID;
 
 public record OrderItemAddedEvent(
         UUID orderId,
+        UUID orderItemId,
         UUID productId,
         int quantity,
         BigDecimal unitPrice,

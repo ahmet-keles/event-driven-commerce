@@ -49,13 +49,15 @@ public class OrderEventsConsumer {
                     envelope.eventId(),
                     envelope.eventType(),
                     event.orderId(),
+                    event.orderItemId(),
                     event.productId(),
                     event.quantity()
             );
 
             log.info(
-                    "Processed inventory reservation for order {}, product {}, quantity {}",
+                    "Processed inventory reservation for order {}, item {}, product {}, quantity {}",
                     event.orderId(),
+                    event.orderItemId(),
                     event.productId(),
                     event.quantity()
             );

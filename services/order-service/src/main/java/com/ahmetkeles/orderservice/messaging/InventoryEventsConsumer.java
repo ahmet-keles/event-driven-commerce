@@ -60,11 +60,12 @@ public class InventoryEventsConsumer {
                         InventoryReservedEvent.class
                 );
 
-        orderService.confirmOrder(event.orderId());
+        orderService.markItemReserved(event.orderId(), event.orderItemId());
 
         log.info(
-                "Confirmed order {} after inventory reservation for product {}, quantity {}",
+                "Recorded inventory reservation for order {}, item {}, product {}, quantity {}",
                 event.orderId(),
+                event.orderItemId(),
                 event.productId(),
                 event.quantity()
         );
