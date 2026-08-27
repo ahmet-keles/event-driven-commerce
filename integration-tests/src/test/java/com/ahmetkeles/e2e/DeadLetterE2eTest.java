@@ -79,11 +79,14 @@ class DeadLetterE2eTest {
                 topics.awaitRecordWithKey(ORDER_DLT, orderId.toString(), WAIT);
 
         // Exact correlation: key, value, and origin all point back at the
-        // one record this test produced.
+        // one record this test produced. The value comparison is on the raw
+        // string, so the dead-lettered record is proven identical to the
+        // produced one, not merely field-equivalent.
         assertEquals(orderId.toString(), deadLetter.key());
+        assertEquals(malformed, deadLetter.value(),
+                "dead-lettered value must be the original record verbatim");
         JsonNode envelope = Fixtures.parseJson(deadLetter.value());
-        assertEquals(eventId.toString(), envelope.get("eventId").asText(),
-                "dead-lettered value must be the original envelope verbatim");
+        assertEquals(eventId.toString(), envelope.get("eventId").asText());
         assertEquals("ORDER_ITEM_ADDED", envelope.get("eventType").asText());
         assertEquals(E2eStack.ORDER_TOPIC, header(deadLetter,
                 ORIGINAL_TOPIC_HEADER));
@@ -145,6 +148,8 @@ class DeadLetterE2eTest {
                 INVENTORY_DLT, orderId.toString(), WAIT);
 
         assertEquals(orderId.toString(), deadLetter.key());
+        assertEquals(malformed, deadLetter.value(),
+                "dead-lettered value must be the original record verbatim");
         JsonNode envelope = Fixtures.parseJson(deadLetter.value());
         assertEquals(eventId.toString(), envelope.get("eventId").asText());
         assertEquals("INVENTORY_RESERVED",
