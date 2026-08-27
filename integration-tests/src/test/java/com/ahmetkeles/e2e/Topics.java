@@ -70,21 +70,7 @@ final class Topics {
             Predicate<JsonNode> match,
             Duration timeout
     ) {
-        Properties properties = new Properties();
-        properties.put(
-                ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers);
-        properties.put(
-                ConsumerConfig.GROUP_ID_CONFIG, "e2e-" + UUID.randomUUID());
-        properties.put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "earliest");
-        properties.put(
-                ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG,
-                StringDeserializer.class);
-        properties.put(
-                ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG,
-                StringDeserializer.class);
-
-        try (KafkaConsumer<String, String> consumer =
-                     new KafkaConsumer<>(properties)) {
+        try (KafkaConsumer<String, String> consumer = newConsumer()) {
             consumer.subscribe(List.of(topic));
 
             long deadline = System.currentTimeMillis() + timeout.toMillis();
@@ -103,6 +89,102 @@ final class Topics {
         fail("Timed out after " + timeout.toSeconds() + "s waiting on topic "
                 + topic + " for: " + description);
         return null;
+    }
+
+    /**
+     * Blocks until a record with the given key appears on the topic and
+     * returns it whole, headers included — used to inspect dead-letter
+     * records, where the recoverer's headers carry the correlation back to
+     * the source topic.
+     */
+    ConsumerRecord<String, String> awaitRecordWithKey(
+            String topic,
+            String key,
+            Duration timeout
+    ) {
+        try (KafkaConsumer<String, String> consumer = newConsumer()) {
+            consumer.subscribe(List.of(topic));
+
+            long deadline = System.currentTimeMillis() + timeout.toMillis();
+
+            while (System.currentTimeMillis() < deadline) {
+                for (ConsumerRecord<String, String> record :
+                        consumer.poll(Duration.ofMillis(250))) {
+                    if (key.equals(record.key())) {
+                        return record;
+                    }
+                }
+            }
+        }
+
+        fail("Timed out after " + timeout.toSeconds() + "s waiting on topic "
+                + topic + " for a record with key " + key);
+        return null;
+    }
+
+    /**
+     * Reads the topic exactly to its current end offsets and returns the
+     * records carrying the given key. Deterministic and sleep-free: the end
+     * offsets are captured up front, so this returns as soon as every
+     * partition has been consumed to that point — callers use it for
+     * negative assertions ("nothing was dead-lettered for this order")
+     * after a positive sync point has proven the pipeline finished.
+     */
+    List<ConsumerRecord<String, String>> recordsWithKey(
+            String topic,
+            String key
+    ) {
+        try (KafkaConsumer<String, String> consumer = newConsumer()) {
+            List<org.apache.kafka.common.TopicPartition> partitions =
+                    consumer.partitionsFor(topic).stream()
+                            .map(info -> new org.apache.kafka.common.TopicPartition(
+                                    info.topic(), info.partition()))
+                            .toList();
+
+            consumer.assign(partitions);
+            consumer.seekToBeginning(partitions);
+
+            var endOffsets = consumer.endOffsets(partitions);
+            List<ConsumerRecord<String, String>> matches =
+                    new java.util.ArrayList<>();
+
+            long deadline = System.currentTimeMillis() + 15_000;
+
+            while (System.currentTimeMillis() < deadline) {
+                boolean done = partitions.stream().allMatch(partition ->
+                        consumer.position(partition)
+                                >= endOffsets.get(partition));
+                if (done) {
+                    return matches;
+                }
+
+                for (ConsumerRecord<String, String> record :
+                        consumer.poll(Duration.ofMillis(250))) {
+                    if (key.equals(record.key())) {
+                        matches.add(record);
+                    }
+                }
+            }
+
+            fail("Timed out reading " + topic + " to its end offsets");
+            return matches;
+        }
+    }
+
+    private KafkaConsumer<String, String> newConsumer() {
+        Properties properties = new Properties();
+        properties.put(
+                ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers);
+        properties.put(
+                ConsumerConfig.GROUP_ID_CONFIG, "e2e-" + UUID.randomUUID());
+        properties.put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "earliest");
+        properties.put(
+                ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG,
+                StringDeserializer.class);
+        properties.put(
+                ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG,
+                StringDeserializer.class);
+        return new KafkaConsumer<>(properties);
     }
 
     static Predicate<JsonNode> envelopeFor(UUID aggregateId, String eventType) {
