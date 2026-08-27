@@ -34,10 +34,18 @@ jobs:
           distribution: temurin
           java-version: '21'
           cache: maven
-          cache-dependency-path: services/${{ matrix.service }}/pom.xml
+          # One cache key shared by every job in this workflow: all three
+          # Maven projects resolve into the same ~/.m2/repository, so a
+          # shared key gives each job the union of dependencies instead of
+          # three cold caches that each miss on the others' artifacts.
+          cache-dependency-path: |
+            services/order-service/pom.xml
+            services/inventory-service/pom.xml
+            integration-tests/pom.xml
 
-      # ubuntu-latest runners ship with a running Docker daemon, which is all
-      # Testcontainers needs to start the PostgreSQL and Kafka containers.
+      - name: Verify Docker and pre-pull test images
+        run: .github/scripts/prepare-docker.sh postgres:17-alpine apache/kafka:4.0.0
+
       - name: Run ${{ matrix.service }} tests
         working-directory: services/${{ matrix.service }}
         run: ./mvnw -B --no-transfer-progress test
@@ -65,6 +73,9 @@ jobs:
             services/order-service/pom.xml
             services/inventory-service/pom.xml
             integration-tests/pom.xml
+
+      - name: Verify Docker and pre-pull test images
+        run: .github/scripts/prepare-docker.sh postgres:17-alpine apache/kafka:4.0.0 eclipse-temurin:21-jre
 
       - name: Build order-service jar
         working-directory: services/order-service
