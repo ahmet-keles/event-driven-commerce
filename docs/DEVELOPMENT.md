@@ -25,7 +25,7 @@ docker info      # must succeed; the daemon has to be running
 ## Repository layout
 
 ```
-compose.yaml                    postgres, inventory-postgres, kafka
+compose.yaml                    postgres, inventory-postgres, payment-postgres, kafka
 .env.example                    template for local secrets/config
 .github/workflows/ci.yml        CI: both test suites on Java 21
 docs/                           this documentation
@@ -56,7 +56,12 @@ the services when you run them on the host. Every variable in
 | `INVENTORY_POSTGRES_PASSWORD` | compose `inventory-postgres`, inventory-service | **Compose fails fast**; no default |
 | `INVENTORY_POSTGRES_HOST` | inventory-service | `127.0.0.1` |
 | `INVENTORY_POSTGRES_PORT` | compose host port mapping, inventory-service | `5434` on both sides |
-| `KAFKA_BOOTSTRAP_SERVERS` | both services | `localhost:29092` |
+| `PAYMENT_POSTGRES_DB` | compose `payment-postgres`, payment-service | `payment` |
+| `PAYMENT_POSTGRES_USER` | compose `payment-postgres`, payment-service | `payment_user` |
+| `PAYMENT_POSTGRES_PASSWORD` | compose `payment-postgres`, payment-service | **Compose fails fast**; no default |
+| `PAYMENT_POSTGRES_HOST` | payment-service on the host | `127.0.0.1` |
+| `PAYMENT_POSTGRES_PORT` | compose host port mapping | `5435` on both sides |
+| `KAFKA_BOOTSTRAP_SERVERS` | all services | `localhost:29092` |
 
 The three passwords/identities marked *fails fast* use Compose's
 `${VAR:?message}` form, so `docker compose up` stops with a readable error
@@ -74,14 +79,15 @@ docker compose up -d --wait
 ```
 
 `--wait` blocks until every container reports healthy, so the services you start
-next never race a database that is still running `initdb`. That starts three
-containers on the `commerce-net` bridge network, all with
+next never race a database that is still running `initdb`. That starts the
+containers below on the `commerce-net` bridge network, all with
 `restart: unless-stopped`:
 
 | Compose service | Container | Host port | Healthcheck |
 |---|---|---|---|
 | `postgres` | `commerce-postgres` | `${POSTGRES_PORT:-5433}` → 5432 | `pg_isready` over TCP, 15 s start period |
 | `inventory-postgres` | `commerce-inventory-postgres` | `${INVENTORY_POSTGRES_PORT:-5434}` → 5432 | `pg_isready` over TCP, 15 s start period |
+| `payment-postgres` | `commerce-payment-postgres` | `${PAYMENT_POSTGRES_PORT:-5435}` → 5432 | `pg_isready` over TCP, 15 s start period |
 | `kafka` | `commerce-kafka` | `29092` (EXTERNAL listener) | `kafka-broker-api-versions.sh`, 30 s start period |
 
 The PostgreSQL healthchecks probe `127.0.0.1:5432` rather than the unix socket
@@ -92,8 +98,8 @@ connections.
 Kafka runs as a single-node KRaft cluster (broker + controller in one process)
 with 3 default partitions per topic, and `KAFKA_LOG_DIRS` pointed at the
 `kafka_data` volume — so **topics and consumer offsets survive
-`docker compose down`** along with both databases' data. Use
-`docker compose down -v` to wipe all three volumes and start clean. The broker
+`docker compose down`** along with all databases' data. Use
+`docker compose down -v` to wipe every volume and start clean. The broker
 gets a 30 s `stop_grace_period` for an orderly shutdown.
 
 To bring up only part of the stack, name the services:

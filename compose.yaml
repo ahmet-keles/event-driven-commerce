@@ -59,6 +59,29 @@ services:
       retries: 10
       start_period: 15s
 
+  payment-postgres:
+    image: postgres:17-alpine
+    container_name: commerce-payment-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${PAYMENT_POSTGRES_DB:-payment}
+      POSTGRES_USER: ${PAYMENT_POSTGRES_USER:-payment_user}
+      POSTGRES_PASSWORD: ${PAYMENT_POSTGRES_PASSWORD:?PAYMENT_POSTGRES_PASSWORD is required - copy .env.example to .env}
+    ports:
+      - "${PAYMENT_POSTGRES_PORT:-5435}:5432"
+    volumes:
+      - payment_postgres_data:/var/lib/postgresql/data
+    networks:
+      - commerce
+    healthcheck:
+      test:
+        - "CMD-SHELL"
+        - "pg_isready -h 127.0.0.1 -p 5432 -U ${PAYMENT_POSTGRES_USER:-payment_user} -d ${PAYMENT_POSTGRES_DB:-payment}"
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+
   kafka:
     image: apache/kafka:4.0.0
     container_name: commerce-kafka
@@ -101,6 +124,7 @@ services:
 volumes:
   postgres_data:
   inventory_postgres_data:
+  payment_postgres_data:
   kafka_data:
 
 networks:
