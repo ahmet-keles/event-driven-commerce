@@ -1,5 +1,6 @@
 package com.ahmetkeles.orderservice.api;
 
+import com.ahmetkeles.orderservice.domain.EmptyOrderSubmissionException;
 import com.ahmetkeles.orderservice.domain.OrderNotModifiableException;
 import com.ahmetkeles.orderservice.domain.OrderStatus;
 import com.ahmetkeles.orderservice.service.OrderService;
@@ -71,6 +72,32 @@ class RestExceptionHandlerTest {
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.status").value(409))
                 .andExpect(jsonPath("$.error").value("order_not_modifiable"))
+                .andExpect(content().string(not(containsString(orderId.toString()))));
+    }
+
+    @Test
+    void optimisticLockingConflictOnSubmitMapsToConflictResponse() throws Exception {
+        when(orderService.submitOrder(any(UUID.class)))
+                .thenThrow(new OptimisticLockingFailureException(INTERNAL_DETAIL));
+
+        mockMvc.perform(post("/api/orders/{orderId}/submit", UUID.randomUUID()))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.status").value(409))
+                .andExpect(jsonPath("$.error").value("concurrent_modification"))
+                .andExpect(content().string(not(containsString(INTERNAL_DETAIL))));
+    }
+
+    @Test
+    void emptyOrderSubmissionMapsToConflictResponse() throws Exception {
+        UUID orderId = UUID.randomUUID();
+
+        when(orderService.submitOrder(any(UUID.class)))
+                .thenThrow(new EmptyOrderSubmissionException(orderId));
+
+        mockMvc.perform(post("/api/orders/{orderId}/submit", orderId))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.status").value(409))
+                .andExpect(jsonPath("$.error").value("order_empty"))
                 .andExpect(content().string(not(containsString(orderId.toString()))));
     }
 

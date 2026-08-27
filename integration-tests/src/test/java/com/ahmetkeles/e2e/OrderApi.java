@@ -18,11 +18,11 @@ final class OrderApi {
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
     /**
-     * POST /items races with the Kafka consumer's writes to the same order
-     * row (markItemReserved / cancel). The service maps the lost
-     * optimistic-lock race to 409 concurrent_modification, whose contract is
-     * "retry the request" — so this client does, briefly. The terminal 409
-     * order_not_modifiable is never retried.
+     * POST /items and POST /submit race with the Kafka consumer's writes to
+     * the same order row (markItemReserved / cancel). The service maps the
+     * lost optimistic-lock race to 409 concurrent_modification, whose
+     * contract is "retry the request" — so this client does, briefly. The
+     * terminal 409s (order_not_modifiable, order_empty) are never retried.
      */
     private static final int MAX_CONFLICT_RETRIES = 50;
     private static final Duration CONFLICT_RETRY_PAUSE = Duration.ofMillis(100);
@@ -53,6 +53,27 @@ final class OrderApi {
                 "/api/orders/" + orderId + "/items",
                 "{\"productId\":\"%s\",\"quantity\":%d,\"unitPrice\":%s}"
                         .formatted(productId, quantity, unitPrice));
+
+        HttpResponse<String> response = exchange(request);
+
+        for (int retry = 0;
+             retry < MAX_CONFLICT_RETRIES && isRetryableConflict(response);
+             retry++) {
+            pause();
+            response = exchange(request);
+        }
+
+        return assertStatusAndParse(request, response, 200);
+    }
+
+    /**
+     * Submits the order (finalizes assembly). Retries transient
+     * concurrent_modification conflicts exactly like {@link #addItem}: the
+     * submit races the consumer's reservation writes to the same order row.
+     */
+    JsonNode submit(UUID orderId) {
+        HttpRequest request = postRequest(
+                "/api/orders/" + orderId + "/submit", "");
 
         HttpResponse<String> response = exchange(request);
 

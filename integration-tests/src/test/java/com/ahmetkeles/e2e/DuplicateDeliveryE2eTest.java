@@ -139,6 +139,8 @@ class DuplicateDeliveryE2eTest {
         UUID orderItemId = UUID.fromString(
                 withItem.get("items").get(0).get("id").asText());
 
+        api.submit(orderId);
+
         await().atMost(WAIT).untilAsserted(() ->
                 assertEquals("CONFIRMED", api.orderStatus(orderId)));
 
@@ -225,6 +227,8 @@ class DuplicateDeliveryE2eTest {
         JsonNode withItem = api.addItem(orderId, productId, 3, "12.50");
         UUID orderItemId = UUID.fromString(
                 withItem.get("items").get(0).get("id").asText());
+
+        api.submit(orderId);
 
         await().atMost(WAIT).untilAsserted(() ->
                 assertEquals("CONFIRMED", api.orderStatus(orderId)));

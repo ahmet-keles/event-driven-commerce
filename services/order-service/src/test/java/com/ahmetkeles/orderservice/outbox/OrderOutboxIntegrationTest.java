@@ -151,6 +151,7 @@ class OrderOutboxIntegrationTest extends PostgreSQLIntegrationTest {
                         order.getId(), UUID.randomUUID(), 1,
                         new BigDecimal("10.00"))
                 .getItems().getFirst().getId();
+        orderService.submitOrder(order.getId());
         orderService.markItemReserved(order.getId(), itemId);
         outboxEventRepository.deleteAll();
 

@@ -77,6 +77,7 @@ class OrderTest {
         Order order = new Order(UUID.randomUUID(), "USD");
         OrderItem item = order.addItem(
                 UUID.randomUUID(), 2, new BigDecimal("15.00"));
+        order.submit();
 
         order.markItemReserved(item.getId());
 
@@ -89,6 +90,7 @@ class OrderTest {
         OrderItem first = order.addItem(
                 UUID.randomUUID(), 1, new BigDecimal("10.00"));
         order.addItem(UUID.randomUUID(), 1, new BigDecimal("20.00"));
+        order.submit();
 
         order.markItemReserved(first.getId());
 
@@ -102,6 +104,7 @@ class OrderTest {
                 UUID.randomUUID(), 1, new BigDecimal("10.00"));
         OrderItem second = order.addItem(
                 UUID.randomUUID(), 1, new BigDecimal("20.00"));
+        order.submit();
 
         order.markItemReserved(first.getId());
         order.markItemReserved(second.getId());
@@ -115,6 +118,7 @@ class OrderTest {
         OrderItem first = order.addItem(
                 UUID.randomUUID(), 1, new BigDecimal("10.00"));
         order.addItem(UUID.randomUUID(), 1, new BigDecimal("20.00"));
+        order.submit();
 
         order.markItemReserved(first.getId());
 
@@ -134,6 +138,7 @@ class OrderTest {
         OrderItem first = order.addItem(
                 sharedProductId, 1, new BigDecimal("10.00"));
         order.addItem(sharedProductId, 1, new BigDecimal("10.00"));
+        order.submit();
 
         order.markItemReserved(first.getId());
         order.markItemReserved(first.getId());
@@ -181,6 +186,7 @@ class OrderTest {
         Order order = new Order(UUID.randomUUID(), "USD");
         OrderItem item = order.addItem(
                 UUID.randomUUID(), 1, new BigDecimal("10.00"));
+        order.submit();
 
         order.markItemReserved(item.getId());
         order.markItemReserved(item.getId());
@@ -207,6 +213,7 @@ class OrderTest {
         Order confirmed = new Order(UUID.randomUUID(), "USD");
         OrderItem item = confirmed.addItem(
                 UUID.randomUUID(), 1, new BigDecimal("10.00"));
+        confirmed.submit();
         confirmed.markItemReserved(item.getId());
 
         assertFalse(confirmed.cancel(),
@@ -228,6 +235,7 @@ class OrderTest {
         Order order = new Order(UUID.randomUUID(), "USD");
         OrderItem item = order.addItem(
                 UUID.randomUUID(), 1, new BigDecimal("10.00"));
+        order.submit();
 
         order.markItemReserved(item.getId());
         order.cancel();
@@ -289,6 +297,7 @@ class OrderTest {
         Order order = new Order(UUID.randomUUID(), "USD");
         OrderItem item = order.addItem(
                 UUID.randomUUID(), 2, new BigDecimal("15.00"));
+        order.submit();
         order.markItemReserved(item.getId());
 
         BigDecimal totalBefore = order.getTotalAmount();
@@ -336,6 +345,159 @@ class OrderTest {
                 OrderNotModifiableException.class,
                 () -> order.addItem(UUID.randomUUID(), 0, null)
         );
+    }
+
+    @Test
+    void newOrderIsUnsubmitted() {
+        Order order = new Order(UUID.randomUUID(), "USD");
+
+        assertFalse(order.isSubmitted());
+        assertEquals(OrderStatus.PENDING, order.getStatus());
+    }
+
+    @Test
+    void cannotSubmitEmptyOrder() {
+        Order order = new Order(UUID.randomUUID(), "USD");
+
+        Instant updatedAtBefore = order.getUpdatedAt();
+
+        assertThrows(
+                EmptyOrderSubmissionException.class,
+                order::submit
+        );
+
+        assertFalse(order.isSubmitted());
+        assertEquals(OrderStatus.PENDING, order.getStatus());
+        assertEquals(updatedAtBefore, order.getUpdatedAt());
+    }
+
+    @Test
+    void submittedOrderRejectsAddItemWithoutMutation() {
+        Order order = new Order(UUID.randomUUID(), "USD");
+        order.addItem(UUID.randomUUID(), 2, new BigDecimal("15.00"));
+        order.submit();
+
+        BigDecimal totalBefore = order.getTotalAmount();
+        Instant updatedAtBefore = order.getUpdatedAt();
+
+        assertThrows(
+                OrderNotModifiableException.class,
+                () -> order.addItem(
+                        UUID.randomUUID(), 1, new BigDecimal("5.00"))
+        );
+
+        assertEquals(OrderStatus.PENDING, order.getStatus());
+        assertEquals(1, order.getItems().size());
+        assertEquals(totalBefore, order.getTotalAmount());
+        assertEquals(updatedAtBefore, order.getUpdatedAt());
+    }
+
+    @Test
+    void allItemsReservedBeforeSubmitDoesNotConfirm() {
+        Order order = new Order(UUID.randomUUID(), "USD");
+        OrderItem item = order.addItem(
+                UUID.randomUUID(), 2, new BigDecimal("15.00"));
+
+        order.markItemReserved(item.getId());
+
+        assertEquals(OrderStatus.PENDING, order.getStatus(),
+                "an unsubmitted order must never confirm, however fast "
+                        + "reservations arrive");
+        assertFalse(order.isSubmitted());
+    }
+
+    @Test
+    void submittingFullyReservedOrderConfirmsImmediately() {
+        Order order = new Order(UUID.randomUUID(), "USD");
+        OrderItem item = order.addItem(
+                UUID.randomUUID(), 2, new BigDecimal("15.00"));
+        order.markItemReserved(item.getId());
+
+        assertTrue(order.submit(),
+                "first submit performs the transition");
+
+        assertTrue(order.isSubmitted());
+        assertEquals(OrderStatus.CONFIRMED, order.getStatus(),
+                "reservations that finished before submission must confirm "
+                        + "in the submitting call itself");
+    }
+
+    @Test
+    void submitBeforeReservationsWaitsForLastReservation() {
+        Order order = new Order(UUID.randomUUID(), "USD");
+        OrderItem first = order.addItem(
+                UUID.randomUUID(), 1, new BigDecimal("10.00"));
+        OrderItem second = order.addItem(
+                UUID.randomUUID(), 1, new BigDecimal("20.00"));
+
+        order.submit();
+        assertEquals(OrderStatus.PENDING, order.getStatus());
+
+        order.markItemReserved(first.getId());
+        assertEquals(OrderStatus.PENDING, order.getStatus());
+
+        order.markItemReserved(second.getId());
+        assertEquals(OrderStatus.CONFIRMED, order.getStatus());
+    }
+
+    @Test
+    void duplicateSubmitDoesNotProduceAnotherTransition() {
+        Order order = new Order(UUID.randomUUID(), "USD");
+        order.addItem(UUID.randomUUID(), 1, new BigDecimal("10.00"));
+
+        assertTrue(order.submit());
+
+        Instant updatedAtAfterSubmit = order.getUpdatedAt();
+
+        assertFalse(order.submit(), "second submit is a true no-op");
+        assertFalse(order.submit(), "third submit is a true no-op");
+
+        assertEquals(OrderStatus.PENDING, order.getStatus());
+        assertTrue(order.isSubmitted());
+        assertEquals(updatedAtAfterSubmit, order.getUpdatedAt());
+    }
+
+    @Test
+    void duplicateSubmitAfterConfirmationIsNoOp() {
+        Order order = new Order(UUID.randomUUID(), "USD");
+        OrderItem item = order.addItem(
+                UUID.randomUUID(), 1, new BigDecimal("10.00"));
+        order.markItemReserved(item.getId());
+        order.submit();
+
+        Instant updatedAtAfterConfirm = order.getUpdatedAt();
+
+        assertFalse(order.submit());
+
+        assertEquals(OrderStatus.CONFIRMED, order.getStatus());
+        assertEquals(updatedAtAfterConfirm, order.getUpdatedAt());
+    }
+
+    @Test
+    void submitOnCancelledOrderThrows() {
+        Order order = new Order(UUID.randomUUID(), "USD");
+        order.addItem(UUID.randomUUID(), 1, new BigDecimal("10.00"));
+        order.cancel();
+
+        assertThrows(
+                OrderNotModifiableException.class,
+                order::submit
+        );
+
+        assertFalse(order.isSubmitted());
+        assertEquals(OrderStatus.CANCELLED, order.getStatus());
+    }
+
+    @Test
+    void submittedPendingOrderCanStillBeCancelled() {
+        Order order = new Order(UUID.randomUUID(), "USD");
+        order.addItem(UUID.randomUUID(), 1, new BigDecimal("10.00"));
+        order.submit();
+
+        assertTrue(order.cancel(),
+                "a reservation failure must still cancel a submitted, "
+                        + "not-yet-confirmed order");
+        assertEquals(OrderStatus.CANCELLED, order.getStatus());
     }
 
     @Test

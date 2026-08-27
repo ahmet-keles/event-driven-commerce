@@ -63,6 +63,8 @@ class CompensationE2eTest {
         // Item A reserves successfully; wait until the reservation is durable
         // in the ledger before introducing the failing item, so this test
         // proves release of a committed reservation, not a lucky ordering.
+        // The order is still being assembled (not yet submitted), so A's
+        // fast reservation cannot prematurely confirm it.
         JsonNode withA = api.addItem(orderId, productA, 3, "12.50");
         UUID itemAId = UUID.fromString(
                 withA.get("items").get(0).get("id").asText());
@@ -78,6 +80,12 @@ class CompensationE2eTest {
         // cancellation must release item A's stock.
         JsonNode withB = api.addItem(orderId, productB, 5, "8.00");
         UUID itemBId = itemIdForProduct(withB, productB);
+
+        // All desired items are in place: finalize assembly. Until this
+        // submit the order cannot confirm, however fast item A's
+        // reservation lands — the failure outcome below then drives the
+        // order to CANCELLED.
+        api.submit(orderId);
 
         await().atMost(WAIT).untilAsserted(() ->
                 assertEquals("CANCELLED", api.orderStatus(orderId)));

@@ -141,6 +141,7 @@ class MultiItemReservationIntegrationTest extends PostgreSQLIntegrationTest {
                 orderId, sharedProductId, 1, new BigDecimal("10.00"));
         orderService.addItem(
                 orderId, sharedProductId, 1, new BigDecimal("10.00"));
+        orderService.submitOrder(orderId);
 
         List<UUID> itemIds = itemIds(orderId);
 
@@ -168,6 +169,8 @@ class MultiItemReservationIntegrationTest extends PostgreSQLIntegrationTest {
                     new BigDecimal("10.00")
             );
         }
+
+        orderService.submitOrder(orderId);
 
         return orderId;
     }

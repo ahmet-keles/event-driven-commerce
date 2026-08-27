@@ -75,6 +75,7 @@ class OrderCancellationOptimisticLockRollbackIntegrationTest
         UUID itemId = orderService
                 .addItem(orderId, UUID.randomUUID(), 1, new BigDecimal("10.00"))
                 .getItems().getFirst().getId();
+        orderService.submitOrder(orderId);
 
         // Only the cancellation's outbox row is under test.
         outboxEventRepository.deleteAll();

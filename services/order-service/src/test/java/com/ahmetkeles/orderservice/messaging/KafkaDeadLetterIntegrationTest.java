@@ -424,12 +424,14 @@ class KafkaDeadLetterIntegrationTest {
     private Order createOrderWithItem() {
         Order order = orderService.createOrder(UUID.randomUUID(), "USD");
 
-        return orderService.addItem(
+        orderService.addItem(
                 order.getId(),
                 UUID.randomUUID(),
                 3,
                 new BigDecimal("12.50")
         );
+
+        return orderService.submitOrder(order.getId());
     }
 
     private void sendInventoryReserved(Order order) throws Exception {
