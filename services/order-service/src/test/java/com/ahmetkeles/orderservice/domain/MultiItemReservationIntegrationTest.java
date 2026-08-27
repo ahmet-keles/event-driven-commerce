@@ -9,6 +9,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 
 import java.math.BigDecimal;
+import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
 
@@ -71,10 +72,27 @@ class MultiItemReservationIntegrationTest extends PostgreSQLIntegrationTest {
         List<UUID> itemIds = itemIds(orderId);
 
         orderService.markItemReserved(orderId, itemIds.get(0));
+
+        Instant updatedAtAfterFirstReservation = updatedAtOf(orderId);
+
         orderService.markItemReserved(orderId, itemIds.get(0));
         orderService.markItemReserved(orderId, itemIds.get(0));
 
         assertEquals(OrderStatus.PENDING, statusOf(orderId));
+        assertEquals(updatedAtAfterFirstReservation, updatedAtOf(orderId));
+    }
+
+    @Test
+    void unknownItemReservationLeavesPersistedOrderUnchanged() {
+        UUID orderId = createOrderWithItems(2);
+
+        Instant updatedAtBefore = updatedAtOf(orderId);
+
+        orderService.markItemReserved(orderId, UUID.randomUUID());
+
+        assertEquals(OrderStatus.PENDING, statusOf(orderId));
+        assertEquals(updatedAtBefore, updatedAtOf(orderId));
+        assertFalse(reservedFlags(orderId).contains(true));
     }
 
     @Test
@@ -170,6 +188,12 @@ class MultiItemReservationIntegrationTest extends PostgreSQLIntegrationTest {
                 .stream()
                 .map(OrderItem::isReserved)
                 .toList();
+    }
+
+    private Instant updatedAtOf(UUID orderId) {
+        return orderRepository.findWithItemsById(orderId)
+                .orElseThrow()
+                .getUpdatedAt();
     }
 
     private OrderStatus statusOf(UUID orderId) {

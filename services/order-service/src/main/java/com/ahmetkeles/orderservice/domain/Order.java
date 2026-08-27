@@ -73,17 +73,27 @@ public class Order {
      * order only once every item is reserved. Reservation state is tracked per
      * item rather than as a count, so a redelivered event for an item that is
      * already reserved cannot advance the order towards confirmation.
+     *
+     * <p>The aggregate is only mutated when a previously-unreserved matching
+     * item is newly marked: a terminal order, an unknown or null item id, and
+     * an already-reserved item all leave the order untouched, including
+     * {@code updatedAt}.
      */
     public void markItemReserved(UUID orderItemId) {
         if (status != OrderStatus.PENDING) {
             return;
         }
 
-        items.stream()
+        OrderItem match = items.stream()
                 .filter(item -> item.getId().equals(orderItemId))
                 .findFirst()
-                .ifPresent(OrderItem::markReserved);
+                .orElse(null);
 
+        if (match == null || match.isReserved()) {
+            return;
+        }
+
+        match.markReserved();
         updatedAt = Instant.now();
 
         if (allItemsReserved()) {

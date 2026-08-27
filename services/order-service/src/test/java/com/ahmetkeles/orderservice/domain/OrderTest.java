@@ -3,6 +3,7 @@ package com.ahmetkeles.orderservice.domain;
 import org.junit.jupiter.api.Test;
 
 import java.math.BigDecimal;
+import java.time.Instant;
 import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -115,10 +116,14 @@ class OrderTest {
         order.addItem(UUID.randomUUID(), 1, new BigDecimal("20.00"));
 
         order.markItemReserved(first.getId());
+
+        Instant updatedAtAfterFirstReservation = order.getUpdatedAt();
+
         order.markItemReserved(first.getId());
         order.markItemReserved(first.getId());
 
         assertEquals(OrderStatus.PENDING, order.getStatus());
+        assertEquals(updatedAtAfterFirstReservation, order.getUpdatedAt());
     }
 
     @Test
@@ -136,13 +141,29 @@ class OrderTest {
     }
 
     @Test
-    void reservationForUnknownItemDoesNotConfirmOrder() {
+    void reservationForUnknownItemLeavesOrderUntouched() {
         Order order = new Order(UUID.randomUUID(), "USD");
         order.addItem(UUID.randomUUID(), 1, new BigDecimal("10.00"));
+
+        Instant updatedAtBefore = order.getUpdatedAt();
 
         order.markItemReserved(UUID.randomUUID());
 
         assertEquals(OrderStatus.PENDING, order.getStatus());
+        assertEquals(updatedAtBefore, order.getUpdatedAt());
+    }
+
+    @Test
+    void reservationForNullItemIdLeavesOrderUntouched() {
+        Order order = new Order(UUID.randomUUID(), "USD");
+        order.addItem(UUID.randomUUID(), 1, new BigDecimal("10.00"));
+
+        Instant updatedAtBefore = order.getUpdatedAt();
+
+        order.markItemReserved(null);
+
+        assertEquals(OrderStatus.PENDING, order.getStatus());
+        assertEquals(updatedAtBefore, order.getUpdatedAt());
     }
 
     @Test
@@ -232,9 +253,13 @@ class OrderTest {
 
         order.markItemReserved(first.getId());
         order.cancel();
+
+        Instant updatedAtAfterCancel = order.getUpdatedAt();
+
         order.markItemReserved(second.getId());
 
         assertEquals(OrderStatus.CANCELLED, order.getStatus());
+        assertEquals(updatedAtAfterCancel, order.getUpdatedAt());
         assertFalse(order.getItems().stream()
                 .filter(item -> item.getId().equals(second.getId()))
                 .findFirst()
