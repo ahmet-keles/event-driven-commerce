@@ -1,6 +1,7 @@
 package com.ahmetkeles.inventoryservice;
 
 import com.ahmetkeles.inventoryservice.inventory.InventoryReservationService;
+import com.ahmetkeles.inventoryservice.messaging.InvalidEventException;
 import com.ahmetkeles.inventoryservice.messaging.OrderEventEnvelope;
 import com.ahmetkeles.inventoryservice.messaging.OrderEventsConsumer;
 import com.ahmetkeles.inventoryservice.messaging.OrderItemAddedEvent;
@@ -88,7 +89,7 @@ class OrderEventsConsumerTest {
     @Test
     void rejectsMalformedMessage() {
         assertThrows(
-                IllegalStateException.class,
+                InvalidEventException.class,
                 () -> consumer.consume("not-json")
         );
 

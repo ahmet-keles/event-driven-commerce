@@ -130,7 +130,7 @@ class InventoryEventsConsumerTest {
     @Test
     void rejectsMalformedMessage() {
         assertThrows(
-                IllegalStateException.class,
+                InvalidEventException.class,
                 () -> consumer.consume("not-json")
         );
 

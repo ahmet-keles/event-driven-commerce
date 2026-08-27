@@ -2,6 +2,10 @@ package com.ahmetkeles.inventoryservice.config;
 
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.common.TopicPartition;
+import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.dao.DuplicateKeyException;
+import org.springframework.dao.TransientDataAccessException;
+import com.ahmetkeles.inventoryservice.messaging.InvalidEventException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -66,6 +70,26 @@ public class KafkaErrorHandlingConfig {
     ) {
         DefaultErrorHandler errorHandler =
                 new DefaultErrorHandler(recoverer, backOff(properties));
+
+        // Exceptions that can never succeed on redelivery skip the retries and
+        // go straight to the dead-letter topic: contract violations raised by
+        // the consumers, and integrity violations (a broken record will break
+        // the same constraint every time). DuplicateKeyException is carved
+        // back out as retryable: a concurrent duplicate insert (e.g. two
+        // deliveries racing on the processed-events table) is resolved by the
+        // idempotency check on redelivery.
+        errorHandler.addNotRetryableExceptions(
+                InvalidEventException.class,
+                DataIntegrityViolationException.class
+        );
+
+        // Transient database failures — optimistic locking conflicts,
+        // lock-acquisition timeouts, deadlocks — are explicitly retryable so
+        // concurrent consumers converge instead of dead-lettering good events.
+        errorHandler.addRetryableExceptions(
+                TransientDataAccessException.class,
+                DuplicateKeyException.class
+        );
 
         errorHandler.setRetryListeners(new LoggingRetryListener());
 

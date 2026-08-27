@@ -16,6 +16,9 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.context.annotation.Bean;
+import org.springframework.dao.CannotAcquireLockException;
+import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.test.context.DynamicPropertyRegistry;
@@ -144,6 +147,31 @@ class KafkaDeadLetterIntegrationTest {
                 if (message.startsWith("fail-twice:") && attempt <= 2) {
                     throw new IllegalStateException(
                             "scripted transient failure " + attempt + " for " + message
+                    );
+                }
+
+                if (message.startsWith("fail-lock-twice:") && attempt <= 2) {
+                    throw new CannotAcquireLockException(
+                            "scripted lock timeout " + attempt + " for " + message
+                    );
+                }
+
+                if (message.startsWith("fail-dup-twice:") && attempt <= 2) {
+                    throw new DuplicateKeyException(
+                            "scripted duplicate key " + attempt + " for " + message
+                    );
+                }
+
+                if (message.startsWith("fail-invalid:")) {
+                    throw new InvalidEventException(
+                            "scripted contract violation for " + message,
+                            new RuntimeException("bad payload")
+                    );
+                }
+
+                if (message.startsWith("fail-integrity:")) {
+                    throw new DataIntegrityViolationException(
+                            "scripted integrity violation for " + message
                     );
                 }
 
@@ -295,6 +323,94 @@ class KafkaDeadLetterIntegrationTest {
                         record -> order.getId().toString().equals(record.key())
                 ).isEmpty(),
                 "modeled business outcomes must not be dead-lettered"
+        );
+    }
+
+    @Test
+    void transientDatabaseFailureIsRetriedAndEventuallyProcessed() throws Exception {
+        String message = "fail-lock-twice:" + UUID.randomUUID();
+
+        kafkaTemplate.send(RETRY_TEST_TOPIC, message).get();
+
+        awaitTrue(
+                () -> FlakyListenerConfig.processed.contains(message),
+                Duration.ofSeconds(20),
+                "message was not processed after transient lock timeouts"
+        );
+
+        assertEquals(
+                CONFIGURED_ATTEMPTS,
+                FlakyListenerConfig.deliveries.get(message).get(),
+                "lock-acquisition failures must be retried"
+        );
+
+        assertTrue(
+                drainDeadLetters(RETRY_TEST_DLT, record -> record.value().equals(message)).isEmpty(),
+                "recovered lock timeout must not reach the dead-letter topic"
+        );
+    }
+
+    @Test
+    void duplicateKeyIsRetriedAsIdempotencyRace() throws Exception {
+        String message = "fail-dup-twice:" + UUID.randomUUID();
+
+        kafkaTemplate.send(RETRY_TEST_TOPIC, message).get();
+
+        awaitTrue(
+                () -> FlakyListenerConfig.processed.contains(message),
+                Duration.ofSeconds(20),
+                "message was not processed after duplicate-key failures"
+        );
+
+        assertEquals(
+                CONFIGURED_ATTEMPTS,
+                FlakyListenerConfig.deliveries.get(message).get(),
+                "duplicate-key failures must be retried"
+        );
+
+        assertTrue(
+                drainDeadLetters(RETRY_TEST_DLT, record -> record.value().equals(message)).isEmpty(),
+                "recovered duplicate-key race must not reach the dead-letter topic"
+        );
+    }
+
+    @Test
+    void invalidEventIsDeadLetteredWithoutRetries() throws Exception {
+        String message = "fail-invalid:" + UUID.randomUUID();
+
+        kafkaTemplate.send(RETRY_TEST_TOPIC, message).get();
+
+        ConsumerRecord<String, String> deadLetter = awaitDeadLetter(
+                RETRY_TEST_DLT,
+                record -> record.value().equals(message),
+                Duration.ofSeconds(20)
+        );
+
+        assertNotNull(deadLetter);
+        assertEquals(
+                1,
+                FlakyListenerConfig.deliveries.get(message).get(),
+                "contract violations must be dead-lettered without retries"
+        );
+    }
+
+    @Test
+    void integrityViolationIsDeadLetteredWithoutRetries() throws Exception {
+        String message = "fail-integrity:" + UUID.randomUUID();
+
+        kafkaTemplate.send(RETRY_TEST_TOPIC, message).get();
+
+        ConsumerRecord<String, String> deadLetter = awaitDeadLetter(
+                RETRY_TEST_DLT,
+                record -> record.value().equals(message),
+                Duration.ofSeconds(20)
+        );
+
+        assertNotNull(deadLetter);
+        assertEquals(
+                1,
+                FlakyListenerConfig.deliveries.get(message).get(),
+                "integrity violations must be dead-lettered without retries"
         );
     }
 

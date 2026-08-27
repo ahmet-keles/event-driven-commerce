@@ -28,36 +28,38 @@ public class InventoryEventsConsumer {
         this.orderService = orderService;
     }
 
+    /**
+     * Failures propagate to the container's error handler with their original
+     * type so it can classify them: contract violations are wrapped in
+     * {@link InvalidEventException} (non-retryable), while exceptions from the
+     * order service — including transient database errors — are not wrapped
+     * at all.
+     */
     @KafkaListener(topics = "${app.kafka.inventory-events-topic}")
     public void consume(String message) {
-        try {
-            InventoryEventEnvelope envelope =
-                    objectMapper.readValue(
-                            message,
-                            InventoryEventEnvelope.class
-                    );
+        InventoryEventEnvelope envelope =
+                parse(
+                        message,
+                        InventoryEventEnvelope.class,
+                        "inventory event envelope"
+                );
 
-            if (INVENTORY_RESERVED.equals(envelope.eventType())) {
-                handleInventoryReserved(envelope);
-                return;
-            }
+        if (INVENTORY_RESERVED.equals(envelope.eventType())) {
+            handleInventoryReserved(envelope);
+            return;
+        }
 
-            if (INVENTORY_RESERVATION_FAILED.equals(envelope.eventType())) {
-                handleInventoryReservationFailed(envelope);
-            }
-        } catch (Exception exception) {
-            throw new IllegalStateException(
-                    "Failed to process inventory event",
-                    exception
-            );
+        if (INVENTORY_RESERVATION_FAILED.equals(envelope.eventType())) {
+            handleInventoryReservationFailed(envelope);
         }
     }
 
     private void handleInventoryReserved(InventoryEventEnvelope envelope) {
         InventoryReservedEvent event =
-                objectMapper.readValue(
+                parse(
                         envelope.payload(),
-                        InventoryReservedEvent.class
+                        InventoryReservedEvent.class,
+                        INVENTORY_RESERVED + " payload"
                 );
 
         orderService.markItemReserved(event.orderId(), event.orderItemId());
@@ -75,9 +77,10 @@ public class InventoryEventsConsumer {
             InventoryEventEnvelope envelope
     ) {
         InventoryReservationFailedEvent event =
-                objectMapper.readValue(
+                parse(
                         envelope.payload(),
-                        InventoryReservationFailedEvent.class
+                        InventoryReservationFailedEvent.class,
+                        INVENTORY_RESERVATION_FAILED + " payload"
                 );
 
         orderService.cancelOrder(event.orderId());
@@ -89,5 +92,16 @@ public class InventoryEventsConsumer {
                 event.requestedQuantity(),
                 event.reason()
         );
+    }
+
+    private <T> T parse(String json, Class<T> type, String description) {
+        try {
+            return objectMapper.readValue(json, type);
+        } catch (RuntimeException exception) {
+            throw new InvalidEventException(
+                    "Malformed " + description,
+                    exception
+            );
+        }
     }
 }
