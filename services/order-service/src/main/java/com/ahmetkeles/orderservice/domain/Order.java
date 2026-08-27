@@ -117,13 +117,21 @@ public class Order {
                 && items.stream().allMatch(OrderItem::isReserved);
     }
 
-    public void cancel() {
+    /**
+     * Cancels the order, reporting whether this call performed the
+     * transition. Exactly one caller ever sees {@code true} for a given
+     * order, which is what lets the service layer emit the cancellation
+     * outbox event exactly once; a terminal order is left untouched,
+     * including {@code updatedAt}.
+     */
+    public boolean cancel() {
         if (status != OrderStatus.PENDING) {
-            return;
+            return false;
         }
 
         status = OrderStatus.CANCELLED;
         updatedAt = Instant.now();
+        return true;
     }
 
     public BigDecimal getTotalAmount() {

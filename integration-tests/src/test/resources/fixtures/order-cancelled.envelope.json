@@ -1,0 +1,8 @@
+{
+  "eventId": "4d5e6f70-8192-a3b4-c5d6-e7f8091a2b3c",
+  "aggregateType": "Order",
+  "aggregateId": "9b1c2d3e-4f50-6172-8394-a5b6c7d8e9f0",
+  "eventType": "ORDER_CANCELLED",
+  "payload": "{\"orderId\":\"9b1c2d3e-4f50-6172-8394-a5b6c7d8e9f0\"}",
+  "occurredAt": "2026-01-01T12:00:03Z"
+}

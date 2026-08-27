@@ -11,9 +11,17 @@ import java.math.BigDecimal;
 import java.util.Optional;
 import java.util.UUID;
 
+import com.ahmetkeles.orderservice.outbox.OutboxEvent;
+import org.mockito.ArgumentCaptor;
+
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class OrderServiceTest {
@@ -95,6 +103,14 @@ class OrderServiceTest {
 
         assertEquals(com.ahmetkeles.orderservice.domain.OrderStatus.CANCELLED,
                 order.getStatus());
+
+        ArgumentCaptor<OutboxEvent> captor =
+                ArgumentCaptor.forClass(OutboxEvent.class);
+        verify(outboxEventRepository).save(captor.capture());
+        assertEquals("ORDER_CANCELLED", captor.getValue().getEventType());
+        assertEquals(order.getId(), captor.getValue().getAggregateId());
+        assertTrue(captor.getValue().getPayload()
+                .contains("\"orderId\":\"" + order.getId() + "\""));
     }
 
     @Test
@@ -110,6 +126,25 @@ class OrderServiceTest {
 
         assertEquals(com.ahmetkeles.orderservice.domain.OrderStatus.CANCELLED,
                 order.getStatus());
+        verify(outboxEventRepository, times(1)).save(any(OutboxEvent.class));
+    }
+
+    @Test
+    void cancellingConfirmedOrderEmitsNoOutboxEvent() {
+        UUID orderId = UUID.randomUUID();
+        Order order = new Order(UUID.randomUUID(), "USD");
+        OrderItem item = order.addItem(
+                UUID.randomUUID(), 1, new BigDecimal("10.00"));
+        order.markItemReserved(item.getId());
+
+        when(orderRepository.findWithItemsById(orderId))
+                .thenReturn(Optional.of(order));
+
+        orderService.cancelOrder(orderId);
+
+        assertEquals(com.ahmetkeles.orderservice.domain.OrderStatus.CONFIRMED,
+                order.getStatus());
+        verify(outboxEventRepository, never()).save(any(OutboxEvent.class));
     }
 
     @Test

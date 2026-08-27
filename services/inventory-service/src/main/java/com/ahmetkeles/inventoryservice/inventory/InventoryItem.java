@@ -70,6 +70,31 @@ public class InventoryItem {
         updatedAt = Instant.now();
     }
 
+    /**
+     * Returns previously reserved stock to the available pool — the inverse
+     * of {@link #reserve(int)}. Releasing more than is currently reserved
+     * means the reservation ledger and the counters have diverged; that is
+     * corruption, not a business outcome, so it throws instead of clamping.
+     */
+    public void release(int quantity) {
+        if (quantity <= 0) {
+            throw new IllegalArgumentException(
+                    "quantity must be greater than zero"
+            );
+        }
+
+        if (reservedQuantity < quantity) {
+            throw new IllegalStateException(
+                    "Cannot release " + quantity + " for product " + productId
+                            + ": only " + reservedQuantity + " reserved"
+            );
+        }
+
+        reservedQuantity -= quantity;
+        availableQuantity += quantity;
+        updatedAt = Instant.now();
+    }
+
     public UUID getProductId() {
         return productId;
     }

@@ -169,6 +169,46 @@ final class Db {
                 .findFirst();
     }
 
+    Optional<String> reservationStatus(UUID orderItemId) {
+        return execute(
+                "SELECT status FROM inventory_reservations"
+                        + " WHERE order_item_id = ?",
+                statement -> {
+                    statement.setObject(1, orderItemId);
+                    try (ResultSet result = statement.executeQuery()) {
+                        return result.next()
+                                ? Optional.of(result.getString(1))
+                                : Optional.empty();
+                    }
+                });
+    }
+
+    long reservationCount(UUID orderId) {
+        return execute(
+                "SELECT COUNT(*) FROM inventory_reservations"
+                        + " WHERE order_id = ?",
+                statement -> {
+                    statement.setObject(1, orderId);
+                    try (ResultSet result = statement.executeQuery()) {
+                        result.next();
+                        return result.getLong(1);
+                    }
+                });
+    }
+
+    Optional<String> orderInventoryState(UUID orderId) {
+        return execute(
+                "SELECT state FROM order_inventory_state WHERE order_id = ?",
+                statement -> {
+                    statement.setObject(1, orderId);
+                    try (ResultSet result = statement.executeQuery()) {
+                        return result.next()
+                                ? Optional.of(result.getString(1))
+                                : Optional.empty();
+                    }
+                });
+    }
+
     private interface Query<T> {
         T run(PreparedStatement statement) throws SQLException;
     }
