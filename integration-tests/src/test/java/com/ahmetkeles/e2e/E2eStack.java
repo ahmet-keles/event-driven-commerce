@@ -33,16 +33,12 @@ import java.util.stream.Stream;
  * once per JVM on first use and shared by every test class; tests isolate by
  * unique UUIDs, never by cleanup, so sharing is safe.
  *
- * <p>Two deliberate divergences from production configuration, both injected
- * via environment so no service code changes:
- * <ul>
- *   <li>{@code SPRING_KAFKA_CONSUMER_AUTO_OFFSET_RESET=earliest} for
- *       order-service (production default is {@code latest}): a fresh consumer
- *       group must not skip events produced before its first partition
- *       assignment.</li>
- *   <li>{@code APP_OUTBOX_PUBLISH_INTERVAL_MS=100} for every service, so each
- *       saga hop completes in well under a second.</li>
- * </ul>
+ * <p>One deliberate divergence from production configuration, injected via
+ * environment so no service code changes:
+ * {@code APP_OUTBOX_PUBLISH_INTERVAL_MS=100} for every service, so each saga
+ * hop completes in well under a second. Everything else — including every
+ * service's {@code auto-offset-reset=earliest} — is the application default,
+ * so the suite exercises the configuration a real deployment gets.
  */
 final class E2eStack {
 
@@ -125,8 +121,7 @@ final class E2eStack {
                 "POSTGRES_USER", "commerce_user",
                 "POSTGRES_PASSWORD", DB_PASSWORD,
                 "KAFKA_BOOTSTRAP_SERVERS", INTERNAL_BOOTSTRAP,
-                "APP_OUTBOX_PUBLISH_INTERVAL_MS", "100",
-                "SPRING_KAFKA_CONSUMER_AUTO_OFFSET_RESET", "earliest"
+                "APP_OUTBOX_PUBLISH_INTERVAL_MS", "100"
         ))
                 .withExposedPorts(8080)
                 .waitingFor(Wait.forHttp("/actuator/health")
