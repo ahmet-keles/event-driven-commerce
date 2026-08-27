@@ -4,6 +4,8 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
+import org.springframework.transaction.annotation.Propagation;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
 import java.util.UUID;
@@ -40,5 +42,36 @@ public interface ProcessedEventRepository
             @Param("eventType") String eventType,
             @Param("aggregateId") UUID aggregateId,
             @Param("processedAt") Instant processedAt
+    );
+
+    /**
+     * Deletes one bounded batch of ledger rows older than the cutoff, oldest
+     * first. The cutoff must be far beyond the longest plausible redelivery
+     * window: a deleted row means the same eventId can be claimed — and its
+     * mutation applied — again.
+     *
+     * <p>{@code FOR UPDATE SKIP LOCKED} keeps concurrent replicas on disjoint
+     * victims and skips rows a live claim transaction still holds. Requires
+     * the caller's transaction so the lock-and-delete pair stays atomic.
+     */
+    @Transactional(propagation = Propagation.MANDATORY)
+    @Modifying
+    @Query(
+            value = """
+                    DELETE FROM processed_events
+                    WHERE event_id IN (
+                        SELECT event_id
+                        FROM processed_events
+                        WHERE processed_at < :cutoff
+                        ORDER BY processed_at ASC, event_id ASC
+                        LIMIT :batchSize
+                        FOR UPDATE SKIP LOCKED
+                    )
+                    """,
+            nativeQuery = true
+    )
+    int deleteProcessedBatch(
+            @Param("cutoff") Instant cutoff,
+            @Param("batchSize") int batchSize
     );
 }

@@ -21,5 +21,9 @@ public abstract class PostgreSQLIntegrationTest {
         registry.add("spring.datasource.username", postgres::getUsername);
         registry.add("spring.datasource.password", postgres::getPassword);
         registry.add("app.kafka.enabled", () -> "false");
+
+        // Retention tests drive the purge synchronously with their own
+        // RetentionJob instance; the background schedule would race them.
+        registry.add("app.retention.enabled", () -> "false");
     }
 }
