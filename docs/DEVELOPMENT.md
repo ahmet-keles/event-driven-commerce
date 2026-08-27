@@ -280,8 +280,10 @@ targeting `main`:
 - An independent `e2e` job that builds both boot jars and runs the
   cross-service suite in `integration-tests/`.
 - `actions/setup-java@v4` with the Temurin distribution, `java-version: '21'`,
-  and one Maven cache keyed on all three `pom.xml` files, shared by every job
-  so each restores the union of dependencies instead of a per-job cold cache.
+  and a per-job Maven cache: each matrix leg keys on its own service's
+  `pom.xml`, and the `e2e` job keys on all three `pom.xml` files since it
+  builds both services and the e2e module. Cache entries are immutable per
+  key, so jobs that run in parallel deliberately do not share a key.
 - `.github/scripts/prepare-docker.sh` before the tests: fails fast with a
   readable error when the Docker daemon is unusable, logs the daemon's version
   and API range, and pre-pulls the test images with retries so a registry

@@ -34,14 +34,11 @@ jobs:
           distribution: temurin
           java-version: '21'
           cache: maven
-          # One cache key shared by every job in this workflow: all three
-          # Maven projects resolve into the same ~/.m2/repository, so a
-          # shared key gives each job the union of dependencies instead of
-          # three cold caches that each miss on the others' artifacts.
-          cache-dependency-path: |
-            services/order-service/pom.xml
-            services/inventory-service/pom.xml
-            integration-tests/pom.xml
+          # Cache keys are per job: GitHub Actions cache entries are
+          # immutable per key, so parallel jobs sharing one key would race —
+          # the first save wins and the others could never add their own
+          # dependencies. Each matrix leg caches against its own pom.
+          cache-dependency-path: services/${{ matrix.service }}/pom.xml
 
       - name: Verify Docker and pre-pull test images
         run: .github/scripts/prepare-docker.sh postgres:17-alpine apache/kafka:4.0.0
@@ -69,6 +66,9 @@ jobs:
           distribution: temurin
           java-version: '21'
           cache: maven
+          # This job builds both services and the e2e module, so its cache
+          # key covers all three poms; the key differs from the matrix jobs'
+          # keys, keeping each job's immutable cache entry self-consistent.
           cache-dependency-path: |
             services/order-service/pom.xml
             services/inventory-service/pom.xml
