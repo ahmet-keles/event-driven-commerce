@@ -43,7 +43,9 @@ throwaway Docker network:
 
 The harness pre-creates `order.events` and `inventory.events` (3 partitions,
 as in production) before either app starts, because neither service creates
-the topic it consumes from.
+the topic it consumes from. The `.DLT` dead-letter topics are declared by the
+services themselves and appear at app startup; nothing in this suite produces
+to them — dead-letter scenarios belong to the retry/DLT test group.
 
 ## Readiness
 
@@ -60,9 +62,11 @@ the topic it consumes from.
 
 Injected via environment variables only — no service code or config changes:
 
-- `SPRING_KAFKA_CONSUMER_AUTO_OFFSET_RESET=earliest` for order-service
-  (production default is `latest`; the production-side fix is tracked with the
-  order-consumer idempotency work).
+- `SPRING_KAFKA_CONSUMER_AUTO_OFFSET_RESET=earliest` for order-service.
+  Production config still leaves this unset (Kafka default `latest`), even
+  after the consumer idempotency ledger landed — a fresh production consumer
+  group would skip history. Flagged as a standalone config gap; the harness
+  papers over it for tests only.
 - `APP_OUTBOX_PUBLISH_INTERVAL_MS=100` for both services, so saga hops
   complete quickly.
 
