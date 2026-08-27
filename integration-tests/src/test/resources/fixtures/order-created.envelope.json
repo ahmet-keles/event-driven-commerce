@@ -1,0 +1,8 @@
+{
+  "eventId": "0f0d1a2b-3c4d-5e6f-7081-92a3b4c5d6e7",
+  "aggregateType": "Order",
+  "aggregateId": "9b1c2d3e-4f50-6172-8394-a5b6c7d8e9f0",
+  "eventType": "ORDER_CREATED",
+  "payload": "{\"orderId\":\"9b1c2d3e-4f50-6172-8394-a5b6c7d8e9f0\",\"customerId\":\"6d5e4f30-2211-4433-8899-aabbccddeeff\",\"currency\":\"USD\",\"status\":\"PENDING\"}",
+  "occurredAt": "2026-01-01T12:00:00Z"
+}

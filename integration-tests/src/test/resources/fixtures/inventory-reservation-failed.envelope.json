@@ -1,0 +1,8 @@
+{
+  "eventId": "3c4d5e6f-7081-92a3-b4c5-d6e7f8091a2b",
+  "aggregateType": "Order",
+  "aggregateId": "9b1c2d3e-4f50-6172-8394-a5b6c7d8e9f0",
+  "eventType": "INVENTORY_RESERVATION_FAILED",
+  "payload": "{\"orderId\":\"9b1c2d3e-4f50-6172-8394-a5b6c7d8e9f0\",\"orderItemId\":\"7c8d9e0f-1a2b-3c4d-5e6f-708192a3b4c5\",\"productId\":\"11111111-2222-3333-4444-555555555555\",\"requestedQuantity\":3,\"reason\":\"INSUFFICIENT_INVENTORY\"}",
+  "occurredAt": "2026-01-01T12:00:02Z"
+}
