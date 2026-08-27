@@ -41,13 +41,13 @@ public class InventoryEventProcessor {
             InventoryEventEnvelope envelope,
             InventoryReservedEvent event
     ) {
-        if (!claim(envelope)) {
-            return false;
-        }
-
-        orderService.markItemReserved(event.orderId(), event.orderItemId());
-
-        return true;
+        return claimAndRun(
+                envelope,
+                () -> orderService.markItemReserved(
+                        event.orderId(),
+                        event.orderItemId()
+                )
+        );
     }
 
     @Transactional
@@ -55,21 +55,29 @@ public class InventoryEventProcessor {
             InventoryEventEnvelope envelope,
             InventoryReservationFailedEvent event
     ) {
-        if (!claim(envelope)) {
-            return false;
-        }
-
-        orderService.cancelOrder(event.orderId());
-
-        return true;
+        return claimAndRun(
+                envelope,
+                () -> orderService.cancelOrder(event.orderId())
+        );
     }
 
-    private boolean claim(InventoryEventEnvelope envelope) {
-        return processedEventRepository.claim(
+    private boolean claimAndRun(
+            InventoryEventEnvelope envelope,
+            Runnable mutation
+    ) {
+        int claimed = processedEventRepository.claim(
                 envelope.eventId(),
                 envelope.eventType(),
                 envelope.aggregateId(),
                 Instant.now()
-        ) == 1;
+        );
+
+        if (claimed == 0) {
+            return false;
+        }
+
+        mutation.run();
+
+        return true;
     }
 }

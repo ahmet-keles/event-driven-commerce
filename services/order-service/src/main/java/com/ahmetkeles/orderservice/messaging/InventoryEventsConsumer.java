@@ -90,11 +90,7 @@ public class InventoryEventsConsumer {
         boolean processed = eventProcessor.processReserved(envelope, event);
 
         if (!processed) {
-            log.info(
-                    "Skipped duplicate inventory event {} for order {}",
-                    envelope.eventId(),
-                    event.orderId()
-            );
+            logDuplicateSkip(envelope, event.orderId());
             return;
         }
 
@@ -123,11 +119,7 @@ public class InventoryEventsConsumer {
                 eventProcessor.processReservationFailed(envelope, event);
 
         if (!processed) {
-            log.info(
-                    "Skipped duplicate inventory event {} for order {}",
-                    envelope.eventId(),
-                    event.orderId()
-            );
+            logDuplicateSkip(envelope, event.orderId());
             return;
         }
 
@@ -137,6 +129,17 @@ public class InventoryEventsConsumer {
                 event.productId(),
                 event.requestedQuantity(),
                 event.reason()
+        );
+    }
+
+    private void logDuplicateSkip(
+            InventoryEventEnvelope envelope,
+            UUID orderId
+    ) {
+        log.info(
+                "Skipped duplicate inventory event {} for order {}",
+                envelope.eventId(),
+                orderId
         );
     }
 
