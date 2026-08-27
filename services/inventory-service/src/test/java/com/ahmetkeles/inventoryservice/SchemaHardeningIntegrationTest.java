@@ -115,4 +115,31 @@ class SchemaHardeningIntegrationTest extends PostgreSQLIntegrationTest {
         assertTrue(indexNames.contains("idx_inventory_outbox_published"));
         assertTrue(indexNames.contains("idx_processed_events_processed_at"));
     }
+
+    @Test
+    void retentionIndexesMatchTheDeleteQueryOrder() {
+        String outboxIndex = indexDefinition("idx_inventory_outbox_published");
+        String processedIndex =
+                indexDefinition("idx_processed_events_processed_at");
+
+        assertTrue(
+                outboxIndex.contains("(published_at, id)")
+                        && outboxIndex.contains("published_at IS NOT NULL"),
+                "outbox retention index must be partial on"
+                        + " (published_at, id); was: " + outboxIndex
+        );
+        assertTrue(
+                processedIndex.contains("(processed_at, event_id)"),
+                "processed-events retention index must cover"
+                        + " (processed_at, event_id); was: " + processedIndex
+        );
+    }
+
+    private String indexDefinition(String indexName) {
+        return jdbcTemplate.queryForObject(
+                "SELECT indexdef FROM pg_indexes WHERE indexname = ?",
+                String.class,
+                indexName
+        );
+    }
 }

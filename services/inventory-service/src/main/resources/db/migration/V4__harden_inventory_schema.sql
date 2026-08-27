@@ -37,13 +37,14 @@ CREATE INDEX idx_inventory_outbox_aggregate_pending
     ON outbox_events (aggregate_id, occurred_at, id)
     WHERE published_at IS NULL;
 
--- Retention scans: both jobs delete oldest-first below an age cutoff, so each
--- needs a range scan on its timestamp. The outbox index is partial — retention
+-- Retention scans: both delete queries select oldest-first below an age
+-- cutoff ordering by (timestamp, id), so each index carries the id tiebreak
+-- and matches its ORDER BY exactly. The outbox index is partial — retention
 -- only ever touches published rows, and keeping unpublished rows out of the
 -- index keeps it disjoint from the publisher's working set.
 CREATE INDEX idx_inventory_outbox_published
-    ON outbox_events (published_at)
+    ON outbox_events (published_at, id)
     WHERE published_at IS NOT NULL;
 
 CREATE INDEX idx_processed_events_processed_at
-    ON processed_events (processed_at);
+    ON processed_events (processed_at, event_id);

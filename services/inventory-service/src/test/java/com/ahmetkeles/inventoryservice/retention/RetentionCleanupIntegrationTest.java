@@ -25,7 +25,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Drives {@link RetentionCleanupJob} directly against real PostgreSQL with
- * the default retention ages (7d published outbox, 14d processed events) and
+ * the default retention ages (7d published outbox, 30d processed events) and
  * a deliberately tiny batch configuration so bounding is observable.
  */
 class RetentionCleanupIntegrationTest extends PostgreSQLIntegrationTest {
@@ -86,7 +86,7 @@ class RetentionCleanupIntegrationTest extends PostgreSQLIntegrationTest {
 
     @Test
     void deletesOldProcessedEventsAndKeepsRecentOnes() {
-        UUID oldEvent = insertProcessedEvent(ageDays(30));
+        UUID oldEvent = insertProcessedEvent(ageDays(60));
         UUID recentEvent = insertProcessedEvent(Duration.ZERO);
 
         retentionCleanupJob.runCleanup();
