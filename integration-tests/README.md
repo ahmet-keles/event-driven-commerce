@@ -14,7 +14,10 @@ databases.
 
 ## Running locally
 
-Requirements: Docker and Java 21 (same as the service suites).
+Requirements: Docker and Java 21 (same as the service suites). Testcontainers
+is pinned to the same 2.x version Spring Boot manages for the services, so any
+engine that works for the service suites — Docker 29+ included — works here,
+with no `DOCKER_API_VERSION` overrides.
 
 ```bash
 # 1. Build both service jars (skip their tests if you only want e2e)

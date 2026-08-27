@@ -34,10 +34,15 @@ jobs:
           distribution: temurin
           java-version: '21'
           cache: maven
+          # Cache keys are per job: GitHub Actions cache entries are
+          # immutable per key, so parallel jobs sharing one key would race —
+          # the first save wins and the others could never add their own
+          # dependencies. Each matrix leg caches against its own pom.
           cache-dependency-path: services/${{ matrix.service }}/pom.xml
 
-      # ubuntu-latest runners ship with a running Docker daemon, which is all
-      # Testcontainers needs to start the PostgreSQL and Kafka containers.
+      - name: Verify Docker and pre-pull test images
+        run: .github/scripts/prepare-docker.sh postgres:17-alpine apache/kafka:4.0.0
+
       - name: Run ${{ matrix.service }} tests
         working-directory: services/${{ matrix.service }}
         run: ./mvnw -B --no-transfer-progress test
@@ -61,10 +66,16 @@ jobs:
           distribution: temurin
           java-version: '21'
           cache: maven
+          # This job builds both services and the e2e module, so its cache
+          # key covers all three poms; the key differs from the matrix jobs'
+          # keys, keeping each job's immutable cache entry self-consistent.
           cache-dependency-path: |
             services/order-service/pom.xml
             services/inventory-service/pom.xml
             integration-tests/pom.xml
+
+      - name: Verify Docker and pre-pull test images
+        run: .github/scripts/prepare-docker.sh postgres:17-alpine apache/kafka:4.0.0 eclipse-temurin:21-jre
 
       - name: Build order-service jar
         working-directory: services/order-service

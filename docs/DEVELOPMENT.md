@@ -254,9 +254,17 @@ Run a single class or method with the Surefire filter:
 ### Troubleshooting tests
 
 - *`Could not find a valid Docker environment`* — the Docker daemon is not
-  running or your user cannot reach the socket.
+  running or your user cannot reach the socket. If the attempted-configuration
+  detail shows *`client version 1.32 is too old. Minimum supported API version
+  is 1.40`*, the daemon is fine — the failure means an old Testcontainers 1.x
+  client: Docker 29 raised the daemon's minimum API version above what 1.x
+  pins. All modules here use Testcontainers 2.x, which negotiates the API
+  version, so no `DOCKER_API_VERSION` / `DOCKER_MIN_API_VERSION` override is
+  ever needed; if you see this error, the module is somehow resolving an old
+  Testcontainers — check `./mvnw dependency:list -DincludeGroupIds=org.testcontainers`.
 - *Image pull timeouts on the first run* — pre-pull with
-  `docker pull postgres:17-alpine && docker pull apache/kafka:4.0.0`.
+  `docker pull postgres:17-alpine && docker pull apache/kafka:4.0.0`
+  (plus `docker pull eclipse-temurin:21-jre` for the e2e suite).
 - *Port conflicts* — Testcontainers uses random host ports and does not clash
   with the Compose stack; conflicts on `5433`/`5434`/`29092` come from another
   Compose stack or a local PostgreSQL/Kafka install.
@@ -269,13 +277,23 @@ targeting `main`:
 - A matrix job per service (`inventory-service`, `order-service`) on
   `ubuntu-latest`, with `fail-fast: false` so both results are always reported —
   the workflow still fails if either service fails.
+- An independent `e2e` job that builds both boot jars and runs the
+  cross-service suite in `integration-tests/`.
 - `actions/setup-java@v4` with the Temurin distribution, `java-version: '21'`,
-  and the Maven cache keyed on that service's `pom.xml`.
-- `./mvnw -B --no-transfer-progress test` in the service directory — the same
+  and a per-job Maven cache: each matrix leg keys on its own service's
+  `pom.xml`, and the `e2e` job keys on all three `pom.xml` files since it
+  builds both services and the e2e module. Cache entries are immutable per
+  key, so jobs that run in parallel deliberately do not share a key.
+- `.github/scripts/prepare-docker.sh` before the tests: fails fast with a
+  readable error when the Docker daemon is unusable, logs the daemon's version
+  and API range, and pre-pulls the test images with retries so a registry
+  hiccup or Docker Hub rate limit surfaces as an attributed pull failure
+  instead of a Testcontainers startup error buried in a test log.
+- `./mvnw -B --no-transfer-progress test` in the module directory — the same
   command you run locally.
 - 30-minute timeout per job and read-only `contents` permission.
 
-No Docker setup step is needed: `ubuntu-latest` runners ship with a running
+No further Docker setup is needed: `ubuntu-latest` runners ship with a running
 Docker daemon, which is all Testcontainers requires to start the PostgreSQL and
 Kafka containers. CI does **not** use `compose.yaml` or `.env`.
 

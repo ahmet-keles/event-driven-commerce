@@ -21,10 +21,15 @@
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
 
         <!-- Kept aligned with the versions Spring Boot 4.1.x manages for the
-             services, so the test clients speak the same wire protocol and
-             start the same broker image the services use in production. -->
-        <testcontainers.version>1.21.3</testcontainers.version>
-        <kafka-clients.version>4.0.0</kafka-clients.version>
+             services (spring-boot-dependencies), so this suite talks to the
+             same Docker engine range, speaks the same wire protocol, and
+             starts the same broker image the services use. Testcontainers
+             1.x pinned Docker API 1.32, which Docker 29+ rejects (minimum
+             API 1.40); 2.x negotiates the API version, so no
+             DOCKER_API_VERSION / DOCKER_MIN_API_VERSION overrides are
+             needed. -->
+        <testcontainers.version>2.0.5</testcontainers.version>
+        <kafka-clients.version>4.2.1</kafka-clients.version>
 
         <junit.version>5.11.4</junit.version>
         <awaitility.version>4.2.2</awaitility.version>
@@ -65,12 +70,12 @@
         </dependency>
         <dependency>
             <groupId>org.testcontainers</groupId>
-            <artifactId>kafka</artifactId>
+            <artifactId>testcontainers-kafka</artifactId>
             <scope>test</scope>
         </dependency>
         <dependency>
             <groupId>org.testcontainers</groupId>
-            <artifactId>postgresql</artifactId>
+            <artifactId>testcontainers-postgresql</artifactId>
             <scope>test</scope>
         </dependency>
         <dependency>
