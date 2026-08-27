@@ -1,8 +1,9 @@
 # Local Development
 
-Everything below reflects the current repository layout: two independent Maven
-projects under `services/`, no root aggregator POM, and one `compose.yaml` for
-the shared infrastructure.
+Everything below reflects the current repository layout: three independent
+Maven projects under `services/`, a cross-service e2e module under
+`integration-tests/`, no root aggregator POM, and one `compose.yaml` for the
+shared infrastructure.
 
 ## Requirements
 
@@ -27,7 +28,7 @@ docker info      # must succeed; the daemon has to be running
 ```
 compose.yaml                    postgres, inventory-postgres, payment-postgres, kafka
 .env.example                    template for local secrets/config
-.github/workflows/ci.yml        CI: both test suites on Java 21
+.github/workflows/ci.yml        CI: all service suites + e2e on Java 21
 docs/                           this documentation
 services/order-service/         Spring Boot app, REST API + Kafka
 services/inventory-service/     Spring Boot app, Kafka only (no HTTP)
@@ -272,7 +273,7 @@ docker exec -it commerce-kafka \
 
 ## Running the test suites
 
-Both suites are independent; run them from their own service directory. **Docker
+The suites are independent; run each from its own service directory. **Docker
 must be running** — Testcontainers starts `postgres:17-alpine` and
 `apache/kafka:4.0.0` containers per test class that needs them, and the first
 run pulls those images. The tests do **not** use `.env` or the Compose stack:

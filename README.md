@@ -1,78 +1,88 @@
 # Event-Driven Commerce Platform
 
-A production-style distributed commerce backend built with Java and Spring Boot.
-
-This project is designed to demonstrate backend engineering, event-driven architecture, distributed systems, database design, containerization, observability, and cloud deployment.
+A production-style distributed commerce backend built with Java and Spring Boot:
+three services that never call each other synchronously and never share a
+database, coordinating an order → inventory → payment saga over Apache Kafka
+with transactional outboxes, idempotent consumers, and compensating actions.
 
 ## Documentation
 
-- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — services, responsibilities, databases, order lifecycle, inventory reservation flow, and what is implemented vs. planned
-- [docs/EVENT_FLOW.md](docs/EVENT_FLOW.md) — Kafka topics, message envelope, event types, the transactional outbox, idempotency, and failure behavior
-- [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) — requirements, environment setup, running both services, and running both test suites
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — services, responsibilities, databases, the order lifecycle, and the reservation/payment/compensation flows
+- [docs/EVENT_FLOW.md](docs/EVENT_FLOW.md) — Kafka topics, the message envelope, every event contract, outbox mechanics, idempotency, retries/DLT, and retention
+- [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) — requirements, environment setup, running the services, and running all test suites
 - [docs/order-domain.md](docs/order-domain.md) — order domain model reference
+- [integration-tests/README.md](integration-tests/README.md) — the cross-service end-to-end suite
 
-## Current Architecture
+## Architecture
 
-Implemented and running today:
+- **order-service** — the only HTTP surface (`/api/orders`): clients assemble an
+  order item by item, then explicitly **submit** it. Owns the order state
+  machine, emits order events through its outbox, and applies inventory and
+  payment outcomes idempotently.
+- **inventory-service** — Kafka-only. Reserves stock per order item
+  (optimistically locked, idempotent), reports success or failure as events,
+  and **releases reservations** when an order cancels.
+- **payment-service** — Kafka-only, runs as a Compose container. Charges
+  confirmed orders through a **simulated, deterministic gateway**: amounts
+  **below 1000.00 approve**, amounts **at or above 1000.00 decline**. Emits
+  `PAYMENT_COMPLETED` / `PAYMENT_FAILED`; a decline cancels the order and the
+  reserved stock is returned.
+- **Apache Kafka** — single-node KRaft broker; topics `order.events`,
+  `inventory.events`, `payment.events`, plus a `<topic>.DLT` dead-letter topic
+  per consumed topic.
+- **PostgreSQL 17** — one database per service (`5433`/`5434`/`5435`), schema
+  managed by Flyway, JPA mappings validated at startup.
 
-- **Order Service** — REST API (`/api/orders`), PostgreSQL persistence, transactional outbox, Kafka producer and consumer, Actuator health
-- **Inventory Service** — Kafka consumer/producer with its own PostgreSQL database, idempotent stock reservation, transactional outbox (no HTTP API)
-- **Payment Service** — Kafka consumer/producer with its own PostgreSQL database and a simulated payment gateway, transactional outbox (no HTTP API); runs as a Compose container
-- **Apache Kafka** — single-node KRaft broker; topics `order.events`, `inventory.events`, and `payment.events`
-- **PostgreSQL** — one database per service, schema managed by Flyway
-- **Docker Compose** — local infrastructure with healthchecks and persistent volumes
-- **Testcontainers** — integration tests against real PostgreSQL and Kafka
-- **GitHub Actions CI** — both test suites on Java 21, on every push to `main` and every pull request
+### The saga
 
-The end-to-end flow that works today: adding an item to an order publishes
-`ORDER_ITEM_ADDED`; the inventory service either reserves stock and publishes
-`INVENTORY_RESERVED` — confirming the order — or publishes
-`INVENTORY_RESERVATION_FAILED`, which cancels it. A confirmed order then
-publishes `ORDER_CONFIRMED`; the payment service charges it through a simulated
-gateway and publishes `PAYMENT_COMPLETED` or `PAYMENT_FAILED`, which the order
-service records idempotently.
+```
+create order ──▶ add items ──▶ submit
+                                 │
+              ORDER_ITEM_ADDED   ▼            per item
+order-service ────────────────▶ inventory-service ──▶ INVENTORY_RESERVED
+                                                  └─▶ INVENTORY_RESERVATION_FAILED
+submitted AND all items reserved ⇒ CONFIRMED ── ORDER_CONFIRMED ──▶ payment-service
+any reservation failure          ⇒ CANCELLED                            │
+                                                    PAYMENT_COMPLETED ◀─┴─▶ PAYMENT_FAILED
+                                                    (order settles)          (order CANCELLED,
+                                                                             stock released)
+```
 
-## Planned Services
+An order confirms only when the client has **explicitly submitted it** and
+every item is reserved — a fast reservation can never confirm an order that is
+still being assembled. Every cancellation (reservation failure or payment
+decline) triggers compensation: inventory-service returns each still-held
+reservation to the available pool, exactly once.
 
-- Notification Service (not implemented)
+## Reliability patterns
 
-## Planned Infrastructure
-
-- Redis
-- AWS
-- Continuous deployment (CI is already in place)
-
-## Engineering Goals
-
-Already in place:
-
-- Event-driven communication between services
-- Transactional outbox pattern
-- Idempotent event consumers (inventory service)
-- Reservation-failure events and order cancellation
-- Integration testing with Testcontainers
-- Continuous integration on every push and pull request
-
-Still to come:
-
-- Multi-item reservation semantics and releasing reserved stock
-- Saga-style workflows and compensating actions
-- Retry and dead-letter handling
-- Distributed caching
-- Observability and metrics beyond Actuator health
-- Load testing
-- Notification service
-- Cloud deployment
+- **Transactional outbox** in all three services — state change and event
+  committed atomically, published by a multi-replica-safe poller
+  (`FOR UPDATE SKIP LOCKED`, bounded lock hold, per-order ordering preserved)
+- **Idempotent consumers** in all three services — a `processed_events` ledger
+  keyed by event id, claimed in the same transaction as the mutation, so
+  at-least-once delivery never double-applies an effect
+- **Bounded retries + dead-letter topics** — transient errors retry with
+  exponential backoff (4 attempts, 500 ms → 5 s); contract violations go
+  straight to `<topic>.DLT`; business failures (insufficient stock, declined
+  charge) are modelled as events and never dead-letter
+- **Optimistic locking** on the order aggregate and inventory rows — concurrent
+  `addItem` / `submit` / reservation / cancellation writes serialize into
+  exactly one committed ordering; REST callers see `409 concurrent_modification`
+- **Deterministic payment idempotency** — the gateway idempotency key is the
+  order id, `payments.order_id` is unique, and terminal outcomes are immutable:
+  a replayed confirmation can never charge twice
+- **Bounded retention** — published outbox rows and expired ledger rows are
+  deleted in size-capped, lock-skipping batches; unpublished events are
+  structurally undeletable
 
 ## Tech Stack
 
-- Java 21
-- Spring Boot 4.1.1
-- PostgreSQL 17
-- Apache Kafka 4.0
-- Flyway
+- Java 21, Spring Boot 4.1.1, Spring Kafka
+- PostgreSQL 17, Flyway
+- Apache Kafka 4.0 (KRaft)
 - Docker / Docker Compose / Testcontainers
-- Maven (wrapper included per service)
+- Maven (wrapper included per module)
 
 ## Local Development
 
@@ -94,17 +104,17 @@ docker compose up -d --wait   # three databases, kafka, payment-service
 
 `--wait` returns once every container is up and each healthcheck passes (the
 payment-service container is built from `services/payment-service/Dockerfile`
-on first use). Data lives in named
-volumes and survives `docker compose down`; use `down -v` to wipe it.
+on first use). Data lives in named volumes and survives
+`docker compose down`; use `down -v` to wipe it.
 
-The databases publish on `POSTGRES_PORT` (default `5433`) and
-`INVENTORY_POSTGRES_PORT` (default `5434`), which set the host port and the
-service's JDBC URL together; Kafka's external listener is on `29092`.
+The databases publish on `POSTGRES_PORT` (default `5433`),
+`INVENTORY_POSTGRES_PORT` (default `5434`), and `PAYMENT_POSTGRES_PORT`
+(default `5435`); Kafka's external listener is on `29092`.
 
-### Run Order Service
+### Run order-service and inventory-service on the host
 
 ```bash
-cd services/order-service
+cd services/order-service      # same pattern for services/inventory-service
 
 set -a
 source ../../.env
@@ -113,50 +123,56 @@ set +a
 ./mvnw spring-boot:run
 ```
 
-### Run Inventory Service
+payment-service already runs as a Compose container; inventory-service and
+payment-service have no HTTP endpoints — follow their logs. Verify
+order-service with:
 
 ```bash
-cd services/inventory-service
-
-set -a
-source ../../.env
-set +a
-
-./mvnw spring-boot:run
+curl http://localhost:8080/actuator/health   # {"status":"UP"}
 ```
 
-The inventory service has no HTTP endpoint; follow its log output instead.
-
-### Health Check
-
-In another terminal:
+### Walk the saga
 
 ```bash
-curl http://localhost:8080/actuator/health
+# create an order, add an item, then submit it
+curl -s -X POST localhost:8080/api/orders \
+  -H 'Content-Type: application/json' \
+  -d '{"customerId":"11111111-1111-1111-1111-111111111111","currency":"USD"}'
+
+curl -s -X POST localhost:8080/api/orders/<orderId>/items \
+  -H 'Content-Type: application/json' \
+  -d '{"productId":"<seeded productId>","quantity":2,"unitPrice":"12.50"}'
+
+curl -s -X POST localhost:8080/api/orders/<orderId>/submit
 ```
 
-Expected response:
-
-```json
-{
-  "status": "UP"
-}
-```
+Once inventory reserves every item the order confirms, payment runs
+(25.00 total → approved; 1000.00+ → declined and the order cancels with its
+stock released). Seeding inventory rows is described in
+[docs/DEVELOPMENT.md](docs/DEVELOPMENT.md#seeding-inventory).
 
 ### Run the tests
 
 Docker must be running — the integration tests start real PostgreSQL and Kafka
 containers via Testcontainers.
 
-From the repository root:
-
 ```bash
-(cd services/order-service && ./mvnw test)        # 45 tests
-(cd services/inventory-service && ./mvnw test)    # 22 tests
+(cd services/order-service && ./mvnw test)        # 189 tests
+(cd services/inventory-service && ./mvnw test)    # 83 tests
+(cd services/payment-service && ./mvnw test)      # 57 tests
 ```
 
-The same two commands run in CI (`.github/workflows/ci.yml`) on Java 21.
+The cross-service end-to-end suite (16 tests: full saga, compensation,
+duplicate delivery, dead-lettering, payment outcomes, wire contracts) builds
+all three boot jars and runs them as containers against real Kafka and three
+PostgreSQL instances — see
+[integration-tests/README.md](integration-tests/README.md).
+
+All four suites run in CI (`.github/workflows/ci.yml`) on Java 21, on every
+push to `main` and every pull request.
 
 ## Project Status
 
-In Development
+v1.0 — the order → inventory → payment saga is complete, tested end to end,
+and running locally under Docker Compose. Natural next steps: a notification
+service, metrics/tracing beyond Actuator health, and cloud deployment.

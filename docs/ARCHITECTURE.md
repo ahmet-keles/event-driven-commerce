@@ -1,16 +1,13 @@
 # Architecture
 
 This document describes the system **as it exists in this repository today**.
-Anything not yet built is listed separately under
-[Implemented vs. planned](#implemented-vs-planned).
 
 ## Overview
 
 The platform is a set of independently deployable Spring Boot services that
-communicate asynchronously over Apache Kafka. There are currently **two**
-services, each owning its own PostgreSQL database. Services never call each
-other synchronously and never share a database; the only integration point is
-Kafka.
+communicate asynchronously over Apache Kafka. There are **three** services,
+each owning its own PostgreSQL database. Services never call each other
+synchronously and never share a database; the only integration point is Kafka.
 
 ```mermaid
 flowchart LR
@@ -18,29 +15,39 @@ flowchart LR
 
     subgraph order["order-service (:8080)"]
         orderapi["REST API<br/>/api/orders"]
-        orderdb[("PostgreSQL<br/>commerce :5433<br/>orders, order_items,<br/>outbox_events")]
+        orderdb[("PostgreSQL<br/>commerce :5433<br/>orders, order_items,<br/>processed_events,<br/>outbox_events")]
     end
 
     subgraph inventory["inventory-service (no HTTP API)"]
-        invlogic["reservation logic"]
-        invdb[("PostgreSQL<br/>inventory :5434<br/>inventory_items,<br/>processed_events,<br/>outbox_events")]
+        invlogic["reservation +<br/>release logic"]
+        invdb[("PostgreSQL<br/>inventory :5434<br/>inventory_items,<br/>inventory_reservations,<br/>order_inventory_state,<br/>processed_events,<br/>outbox_events")]
     end
 
-    ordertopic{{"Kafka topic<br/>order.events"}}
-    inventorytopic{{"Kafka topic<br/>inventory.events"}}
+    subgraph payment["payment-service (no HTTP API)"]
+        paylogic["simulated gateway<br/>&lt; 1000.00 approves<br/>&ge; 1000.00 declines"]
+        paydb[("PostgreSQL<br/>payment :5435<br/>payments,<br/>processed_events,<br/>outbox_events")]
+    end
+
+    ordertopic{{"order.events"}}
+    inventorytopic{{"inventory.events"}}
+    paymenttopic{{"payment.events"}}
 
     client --> orderapi
     orderapi --- orderdb
     orderdb -- "outbox publisher" --> ordertopic
-    ordertopic -- "OrderEventsConsumer" --> invlogic
+    ordertopic --> invlogic
+    ordertopic --> paylogic
     invlogic --- invdb
     invdb -- "outbox publisher" --> inventorytopic
-    inventorytopic -- "InventoryEventsConsumer" --> orderapi
+    inventorytopic --> orderapi
+    paylogic --- paydb
+    paydb -- "outbox publisher" --> paymenttopic
+    paymenttopic --> orderapi
 ```
 
-Both directions of the loop use the same mechanism: a business transaction
-writes domain state **and** an outbox row in one database transaction, and a
-scheduled publisher later ships unpublished outbox rows to Kafka. See
+Every hop uses the same mechanism: a business transaction writes domain state
+**and** an outbox row in one database transaction, and a scheduled,
+multi-replica-safe publisher later ships unpublished outbox rows to Kafka. See
 [EVENT_FLOW.md](EVENT_FLOW.md) for the message contracts and the outbox
 mechanics.
 
@@ -48,18 +55,21 @@ mechanics.
 
 | Component | Image / module | Local endpoint | Notes |
 |---|---|---|---|
-| order-service | `services/order-service` | `http://localhost:8080` | Spring MVC REST API + Actuator (`health`, `info`) |
-| inventory-service | `services/inventory-service` | none | No web or actuator dependency; runs as a Kafka consumer/publisher process |
-| PostgreSQL (orders) | `postgres:17-alpine` | `localhost:${POSTGRES_PORT:-5433}` | Compose service `postgres`; database, user and password are required from `.env`; `pg_isready` healthcheck |
-| PostgreSQL (inventory) | `postgres:17-alpine` | `localhost:${INVENTORY_POSTGRES_PORT:-5434}` | Compose service `inventory-postgres`; defaults to database `inventory` / user `inventory_user`; `pg_isready` healthcheck |
+| order-service | `services/order-service` | `http://localhost:8080` | Spring MVC REST API + Actuator (`health`, `info`); run on the host |
+| inventory-service | `services/inventory-service` | none | No web dependency; Kafka consumer/publisher process; run on the host |
+| payment-service | `services/payment-service` | none | No web dependency; runs as a Compose container built from its `Dockerfile` |
+| PostgreSQL (orders) | `postgres:17-alpine` | `localhost:${POSTGRES_PORT:-5433}` | Compose service `postgres`; credentials required from `.env`; `pg_isready` healthcheck |
+| PostgreSQL (inventory) | `postgres:17-alpine` | `localhost:${INVENTORY_POSTGRES_PORT:-5434}` | Compose service `inventory-postgres`; `pg_isready` healthcheck |
+| PostgreSQL (payment) | `postgres:17-alpine` | `localhost:${PAYMENT_POSTGRES_PORT:-5435}` | Compose service `payment-postgres`; `pg_isready` healthcheck |
 | Kafka | `apache/kafka:4.0.0` | `localhost:29092` | Compose service `kafka`, single-node KRaft (broker + controller), 3 default partitions, broker-API healthcheck |
 
-All three infrastructure containers join the `commerce-net` bridge network, use
-`restart: unless-stopped`, and declare healthchecks, so
-`docker compose up -d --wait` returns only once each one is actually accepting
-connections. See [DEVELOPMENT.md](DEVELOPMENT.md#2-start-the-infrastructure).
+All Compose services join one bridge network, use `restart: unless-stopped`,
+and (payment-service excepted — it deliberately exposes nothing to probe)
+declare healthchecks, so `docker compose up -d --wait` returns only once the
+stack is actually ready. See
+[DEVELOPMENT.md](DEVELOPMENT.md#2-start-the-infrastructure).
 
-Both services are built on the Spring Boot `4.1.1` parent with
+All three services are built on the Spring Boot `4.1.1` parent with
 `<java.version>21</java.version>`, use Flyway for schema migrations, and run
 with `spring.jpa.hibernate.ddl-auto=validate` — the JPA mappings are validated
 against the Flyway-managed schema at startup, never generated from it.
@@ -71,211 +81,204 @@ Source: `services/order-service/src/main/java/com/ahmetkeles/orderservice`
 1. **Own the order aggregate.** `Order` and `OrderItem` (`domain/`) enforce the
    invariants: a customer id and a non-blank currency are required, item
    quantity must be positive, unit price must be non-negative, `totalAmount` is
-   recomputed from item subtotals, and a new order starts as `PENDING`.
+   recomputed from item subtotals, and a new order starts as `PENDING`,
+   unsubmitted, with `payment_status = NOT_STARTED`. The aggregate root carries
+   a JPA `@Version` column: concurrent writes (`addItem` vs `submit`, a
+   reservation vs a cancellation) serialize into exactly one committed
+   ordering, never a silent lost update.
 2. **Expose the public REST API** (`api/OrderController`):
 
    | Method | Path | Behavior |
    |---|---|---|
    | `POST` | `/api/orders` | Creates a `PENDING` order from `{customerId, currency}`, returns `201` |
-   | `GET` | `/api/orders/{orderId}` | Returns the order with its items |
-   | `POST` | `/api/orders/{orderId}/items` | Adds `{productId, quantity, unitPrice}` and returns the updated order |
+   | `GET` | `/api/orders/{orderId}` | Returns the order with its items, submission flag, and status |
+   | `POST` | `/api/orders/{orderId}/items` | Adds `{productId, quantity, unitPrice}`; allowed only while the order is `PENDING` **and not yet submitted** |
+   | `POST` | `/api/orders/{orderId}/submit` | Finalizes assembly; requires at least one item; duplicate submits are no-ops |
 
-   `RestExceptionHandler` maps `OrderNotFoundException` to `404 not_found`,
-   bean-validation and path-type failures to `400 validation_error`, and
-   `IllegalArgumentException` to `400 invalid_argument`, all as
-   `ApiError {status, error, message}`.
+   `RestExceptionHandler` maps everything to `ApiError {status, error, message}`:
+
+   | HTTP | `error` | When |
+   |---|---|---|
+   | `404` | `not_found` | Unknown order id |
+   | `409` | `order_not_modifiable` | `addItem` on a submitted or terminal order; `submit` on a cancelled order |
+   | `409` | `order_empty` | `submit` on an order with no items |
+   | `409` | `concurrent_modification` | An optimistic-lock race lost to a concurrent write; the client retries |
+   | `400` | `validation_error` / `invalid_argument` | Bean-validation, path-type, or argument failures |
+
 3. **Write outbox events in the same transaction as the state change.**
-   `OrderService.createOrder` writes the order plus an `ORDER_CREATED` outbox
-   row; `OrderService.addItem` writes the item plus an `ORDER_ITEM_ADDED` row.
-4. **Publish the outbox to Kafka.** `OutboxPublisher` polls unpublished rows and
-   sends them to `order.events`.
-5. **React to inventory events.** `InventoryEventsConsumer` listens to
-   `inventory.events` and handles two event types: `INVENTORY_RESERVED` calls
-   `OrderService.confirmOrder` (`PENDING → CONFIRMED`), and
-   `INVENTORY_RESERVATION_FAILED` calls `OrderService.cancelOrder`
-   (`PENDING → CANCELLED`). Any other event type is ignored.
+   `ORDER_CREATED` with the order, `ORDER_ITEM_ADDED` with each item,
+   `ORDER_CONFIRMED` with the confirming transition, `ORDER_CANCELLED` with
+   each cancellation — each emitted exactly once, in the transaction that
+   performed the transition.
+4. **Publish the outbox to Kafka** (`order.events`) through the shared
+   multi-replica-safe publisher.
+5. **Apply inventory and payment outcomes idempotently.** Two consumers with a
+   shared `processed_events` ledger (claimed via `ON CONFLICT DO NOTHING`
+   inside the mutation's transaction, so a rolled-back mutation releases its
+   claim): `InventoryEventsConsumer` marks items reserved
+   (`INVENTORY_RESERVED`) or cancels the order
+   (`INVENTORY_RESERVATION_FAILED`); `PaymentEventsConsumer` settles the
+   payment leg (`PAYMENT_COMPLETED`) or cancels the confirmed order
+   (`PAYMENT_FAILED`).
 6. **Expose health.** `management.endpoints.web.exposure.include=health,info`.
 
 ### order-service schema
 
-`V1__create_order_schema.sql` creates `orders` (with a
-`CHECK (status IN ('PENDING','CONFIRMED','CANCELLED'))` constraint) and
-`order_items`. `V2__create_outbox_events.sql` creates `outbox_events` with a
-partial index on `occurred_at WHERE published_at IS NULL` (the publisher's
-query path) and an index on `aggregate_id`.
+Migrations `V1`–`V8`: the order and item tables, the outbox, per-item
+`reserved` flags, the `processed_events` ledger, the optimistic-lock
+`version`, the `submitted` flag, the `payment_status` column, and a hardening
+pass (NOT NULL and CHECK constraints, publisher-shaped partial indexes,
+retention indexes).
 
 ## inventory-service responsibilities
 
 Source: `services/inventory-service/src/main/java/com/ahmetkeles/inventoryservice`
 
 1. **Own per-product stock.** `InventoryItem` holds `availableQuantity`,
-   `reservedQuantity`, a JPA `@Version` column for optimistic locking, and
-   `updatedAt`. `reserve(quantity)` rejects non-positive quantities and throws
-   `InsufficientInventoryException` when `availableQuantity < quantity`;
-   otherwise it moves stock from available to reserved.
-2. **Consume order events.** `OrderEventsConsumer` listens to `order.events` and
-   acts only on `ORDER_ITEM_ADDED`; every other event type is ignored.
-   (`ORDER_CREATED` is published but currently has no consumer.)
-3. **Reserve idempotently and transactionally.**
-   `InventoryReservationService.reserve` runs in one transaction. It returns
-   immediately if the envelope's `eventId` is already in `processed_events`;
-   otherwise it takes one of two paths, both of which commit:
-
-   - **Reserved** — the `InventoryItem` exists and holds enough stock: quantity
-     moves from available to reserved, a `processed_events` row is written, and
-     an `INVENTORY_RESERVED` outbox row is written.
-   - **Failed** — the product has no inventory row
-     (`InventoryItemNotFoundException`) or too little stock
-     (`InsufficientInventoryException`): the exception is caught and logged, no
-     stock changes, a `processed_events` row is still written, and an
-     `INVENTORY_RESERVATION_FAILED` outbox row is written carrying a `reason` of
-     `INVENTORY_ITEM_NOT_FOUND` or `INSUFFICIENT_INVENTORY`.
-
-   A reservation failure is therefore a business outcome reported downstream,
-   not an exception that escapes the consumer.
-4. **Publish the outbox to Kafka.** `OutboxPublisher` sends unpublished rows to
-   `inventory.events` and logs failures, leaving `published_at` null for retry.
-5. **No HTTP surface.** The service has no web or actuator dependency, so there
-   is no REST API and no `/actuator/health` endpoint. There is also no API or
-   migration that seeds `inventory_items` — stock rows must be inserted
-   directly (see [DEVELOPMENT.md](DEVELOPMENT.md#seeding-inventory)).
+   `reservedQuantity`, and a JPA `@Version` column: two racing reservations for
+   the last unit produce exactly one winner.
+2. **Reserve per order item, idempotently and transactionally.**
+   `OrderEventsConsumer` acts on `ORDER_ITEM_ADDED`. In one transaction the
+   service dedups on the envelope's `eventId` (`processed_events`), then either
+   moves stock from available to reserved and records the reservation in the
+   `inventory_reservations` ledger (keyed by order item id), or catches the
+   business failure and records it — both paths commit and emit an outbox row:
+   `INVENTORY_RESERVED`, or `INVENTORY_RESERVATION_FAILED` with `reason`
+   `INSUFFICIENT_INVENTORY` / `INVENTORY_ITEM_NOT_FOUND`. A reservation
+   failure is a modelled outcome, never a consumer error.
+3. **Release stock when an order cancels (compensation).** The same consumer
+   acts on `ORDER_CANCELLED`: the order is marked cancelled in
+   `order_inventory_state` and every still-`RESERVED` ledger row for the order
+   is returned to the available pool — all in one transaction, exactly once
+   across redeliveries. Reserve and release both lock the order's state row
+   first, so a late `ORDER_ITEM_ADDED` arriving after the cancellation
+   reserves nothing instead of leaking stock.
+4. **Publish the outbox** (`inventory.events`).
+5. **No HTTP surface.** There is no API or migration that seeds
+   `inventory_items` — stock rows are inserted directly (see
+   [DEVELOPMENT.md](DEVELOPMENT.md#seeding-inventory)).
 
 ### inventory-service schema
 
-`V1__create_inventory_schema.sql` creates `inventory_items` (primary key
-`product_id`, non-negative check constraints on both quantity columns) and
-`processed_events` (primary key `event_id`). `V2__create_inventory_outbox.sql`
-creates the service's own `outbox_events` table with the same shape and indexes
-as the order-service outbox.
+Migrations `V1`–`V4`: stock and `processed_events` tables, the outbox, the
+reservation ledger (`inventory_reservations`, `order_inventory_state`), and a
+hardening pass (foreign keys, publisher-shaped partial indexes, retention
+indexes).
+
+## payment-service responsibilities
+
+Source: `services/payment-service/src/main/java/com/ahmetkeles/paymentservice`
+
+1. **Charge confirmed orders.** `OrderEventsConsumer` acts on
+   `ORDER_CONFIRMED` from `order.events` (all other event types on the topic
+   are ignored) and charges the order's `totalAmount` through the
+   `PaymentGateway` abstraction.
+2. **Simulated, deterministic gateway.** `SimulatedPaymentGateway` computes
+   the outcome locally — no money moves anywhere:
+   - amount **strictly below** `app.payment.gateway.decline-threshold`
+     (default `1000.00`) → **approved**;
+   - amount **at or above** the threshold → **declined** with a fixed reason.
+
+   The gateway reference is derived deterministically from the idempotency
+   key, so a replayed charge yields the identical reference and outcome —
+   the behavior a real provider's idempotency keys give. Swapping the bean
+   for a real provider is the intended path to production.
+3. **Charge at most once, three layers deep.** The `processed_events` ledger
+   dedups a redelivered `eventId`; a **unique constraint on
+   `payments.order_id`** absorbs a re-emitted confirmation with a fresh
+   `eventId`; and the gateway idempotency key **is the order id**, so a crash
+   between charge and commit replays into the original outcome. A payment's
+   terminal outcome is immutable — no code path updates a `payments` row.
+4. **Emit the outcome** through the outbox to `payment.events`:
+   `PAYMENT_COMPLETED` or `PAYMENT_FAILED` (a declined charge is a business
+   outcome, never a retry and never a dead letter).
+5. **No HTTP surface**; runs as a Compose container.
+
+### payment-service schema
+
+Migrations `V1`–`V2`: `payments` (unique `order_id`, amount and status
+CHECKs), `processed_events`, the outbox, and retention indexes.
 
 ## Order lifecycle
 
-`OrderStatus` defines three values: `PENDING`, `CONFIRMED`, `CANCELLED`, and
-all three are reachable today:
+`OrderStatus`: `PENDING`, `CONFIRMED`, `CANCELLED`. Orthogonally,
+`payment_status`: `NOT_STARTED`, `PENDING`, `COMPLETED`, `FAILED`.
 
 ```
-                      POST /api/orders
-                             │
-                             ▼
-                        ┌─────────┐
-                        │ PENDING │◀── POST /api/orders/{id}/items
-                        └─────────┘        (status unchanged)
-                      ┌──────┴──────┐
-    INVENTORY_RESERVED│             │INVENTORY_RESERVATION_FAILED
-                      ▼             ▼
-                ┌───────────┐ ┌───────────┐
-                │ CONFIRMED │ │ CANCELLED │
-                └───────────┘ └───────────┘
-
-  Both are terminal: confirm() and cancel() are no-ops unless the order
-  is still PENDING, so a confirmed order is never cancelled and a
-  cancelled order is never confirmed.
+        POST /api/orders
+               │
+               ▼
+          ┌─────────┐   POST …/items   (only while PENDING and unsubmitted)
+          │ PENDING │◀──────────────
+          │         │   POST …/submit (needs ≥1 item; finalizes assembly)
+          └─────────┘
+               │
+   submitted AND every item reserved          any INVENTORY_RESERVATION_FAILED,
+               │                              or PAYMENT_FAILED on a CONFIRMED order
+               ▼                                             │
+         ┌───────────┐                                       ▼
+         │ CONFIRMED │  payment_status → PENDING       ┌───────────┐
+         └───────────┘  ORDER_CONFIRMED emitted        │ CANCELLED │
+               │                                       └───────────┘
+   PAYMENT_COMPLETED → payment_status COMPLETED              ▲
+   PAYMENT_FAILED    → payment_status FAILED ────────────────┘
+                       (order cancelled, ORDER_CANCELLED emitted,
+                        inventory released)
 ```
 
-Behavior worth knowing, as currently coded:
+The rules, as coded in the aggregate:
 
-- `Order.confirm()` and `Order.cancel()` both return early unless the order is
-  `PENDING`. Repeated or interleaved `INVENTORY_RESERVED` /
-  `INVENTORY_RESERVATION_FAILED` events for the same order are therefore
-  harmless — whichever arrives first wins, and later ones change nothing.
-- The transition happens on the **first** inventory event for an order. There is
-  no check that every item on the order has been reserved, so an order with
-  several items is confirmed by the first successful reservation and cancelled
-  by the first failed one.
-- `addItem` has no status guard: items can still be added to a `CONFIRMED` or
-  `CANCELLED` order, and doing so emits another `ORDER_ITEM_ADDED` event.
-- Cancelling an order triggers compensation: the transition emits an
-  `ORDER_CANCELLED` event, and inventory-service releases every reservation it
-  still holds for that order from its own reservation ledger (see
-  [EVENT_FLOW.md](EVENT_FLOW.md)).
+- **Explicit submission.** `addItem` is rejected (`409 order_not_modifiable`)
+  the moment the order is submitted or terminal, mutating nothing. `submit`
+  requires at least one item, is idempotent, and participates in optimistic
+  locking.
+- **Confirmation has one site.** `PENDING → CONFIRMED` happens iff the order
+  is **submitted AND every item is reserved** — whichever half completes last
+  performs the transition. A fast reservation cannot confirm an order still
+  being assembled; reservations that finish before submission confirm inside
+  the submitting transaction itself. The same mutation opens the payment leg
+  and emits `ORDER_CONFIRMED`, exactly once.
+- **Terminal states latch.** A confirmed order is never cancelled by a late
+  reservation failure; a cancelled order is never confirmed by a late
+  reservation. The one exception is deliberate: `PAYMENT_FAILED` cancels a
+  *confirmed* order through a dedicated payment-failure transition, and the
+  first terminal payment outcome wins — `COMPLETED` never becomes `FAILED`,
+  and vice versa, across any redelivery.
+- **Cancellation always compensates.** Every `PENDING → CANCELLED` and
+  payment-failure cancellation emits `ORDER_CANCELLED` in the same
+  transaction, and inventory-service releases the order's held stock.
 
-## Inventory reservation flow
+## Cross-cutting patterns
 
-1. A client adds an item: `POST /api/orders/{orderId}/items`.
-2. In one transaction, order-service persists the `OrderItem`, updates
-   `totalAmount`, and inserts an `ORDER_ITEM_ADDED` row into its
-   `outbox_events`.
-3. Within roughly one polling interval, order-service's `OutboxPublisher` sends
-   that row to `order.events`, keyed by the order id, and stamps `published_at`.
-4. inventory-service's `OrderEventsConsumer` (group `inventory-service`)
-   receives the envelope and deserializes the payload.
-5. `InventoryReservationService.reserve` opens a transaction:
-   - `processed_events` already contains `eventId` → return, nothing changes.
-   - Product row missing → caught as `INVENTORY_ITEM_NOT_FOUND`:
-     `processed_events` row + `INVENTORY_RESERVATION_FAILED` outbox row,
-     committed.
-   - `availableQuantity < quantity` → caught as `INSUFFICIENT_INVENTORY`:
-     `processed_events` row + `INVENTORY_RESERVATION_FAILED` outbox row,
-     committed, stock untouched.
-   - Otherwise: available decreases, reserved increases, `processed_events` row
-     written, `INVENTORY_RESERVED` outbox row written — all committed together.
-
-   `InventoryReservationIntegrationTest` and `InventoryReservationServiceTest`
-   cover all four branches.
-6. inventory-service's `OutboxPublisher` sends the resulting row to
-   `inventory.events`, keyed by the order id.
-7. order-service's `InventoryEventsConsumer` (group `order-service`) receives it
-   and either confirms the order (`INVENTORY_RESERVED`) or cancels it
-   (`INVENTORY_RESERVATION_FAILED`).
-
-An exception thrown out of either consumer propagates to Spring Kafka; no custom
-error handler, retry topic, or dead-letter topic is configured, so the framework
-defaults apply. Successfully reserved stock is never released and never turns
-into a completed shipment — there is no downstream step yet.
-
-## Cross-cutting patterns in place
-
-- **Transactional outbox** in both services — see
+- **Transactional outbox** in all three services, with a
+  `FOR UPDATE SKIP LOCKED` claim, bounded lock hold, and a cross-replica
+  per-order ordering guard — see
   [EVENT_FLOW.md](EVENT_FLOW.md#transactional-outbox-pattern).
-- **Consumer idempotency** in inventory-service via `processed_events`, keyed by
-  the envelope `eventId`.
-- **Optimistic locking** on `inventory_items` via `@Version`.
-- **Bounded retention** in inventory-service for published outbox rows and
-  `processed_events`, batch-limited and multi-replica safe — see
-  [EVENT_FLOW.md](EVENT_FLOW.md#retention-inventory-service).
-- **Flyway migrations** with `ddl-auto=validate` in both services.
-- **Reservation-failure events** that drive order cancellation, closing the
-  success and failure sides of the loop.
-- **Testcontainers integration tests** covering persistence, the REST API, the
-  outbox, and both Kafka hops — 45 tests in order-service, 22 in
-  inventory-service.
-- **GitHub Actions CI** running both suites on Java 21 with Testcontainers for
-  every push to `main` and every pull request — see
+- **Consumer idempotency** in all three services via `processed_events`,
+  claimed inside the mutation's transaction.
+- **Bounded retries with exponential backoff, then `<topic>.DLT`** in all
+  three services — see [EVENT_FLOW.md](EVENT_FLOW.md#failure-behavior).
+- **Optimistic locking** on the order aggregate (`orders.version`) and on
+  `inventory_items`.
+- **Bounded retention** in all three services for published outbox rows and
+  expired ledger rows — see [EVENT_FLOW.md](EVENT_FLOW.md#retention).
+- **Flyway migrations** with `ddl-auto=validate` everywhere; schemas hardened
+  with NOT NULL and CHECK constraints so no write path can persist an
+  unrepresentable row.
+- **Testcontainers test suites** per service (order 189, inventory 83,
+  payment 57) plus a 16-test cross-service end-to-end suite that runs all
+  three boot jars as containers against real Kafka and three PostgreSQL
+  instances.
+- **GitHub Actions CI** running all four suites on Java 21 for every push to
+  `main` and every pull request — see
   [DEVELOPMENT.md](DEVELOPMENT.md#continuous-integration).
 
-## Implemented vs. planned
+## Not implemented (by design, for now)
 
-### Implemented
-
-| Capability | Where |
-|---|---|
-| Order REST API (create, read, add item) | `order-service` `api/` |
-| Order domain invariants and totals | `order-service` `domain/` |
-| Order persistence with Flyway migrations | `order-service` `resources/db/migration` |
-| Transactional outbox + scheduled Kafka publisher | both services, `outbox/` |
-| `order.events` and `inventory.events` topics | `KafkaTopicConfig` in both services |
-| Inventory reservation with optimistic locking | `inventory-service` `inventory/` |
-| Idempotent order-event consumer | `inventory-service` `processed_events` |
-| Reservation-failure events (`INVENTORY_RESERVATION_FAILED`) | `inventory-service` `InventoryReservationService` |
-| Order confirmation driven by `INVENTORY_RESERVED` | `order-service` `messaging/` |
-| Order cancellation driven by `INVENTORY_RESERVATION_FAILED` | `order-service` `messaging/`, `Order.cancel()` |
-| Local Kafka + two PostgreSQL instances with healthchecks | `compose.yaml` |
-| Unit and Testcontainers integration test suites (45 + 22 tests) | `src/test` in both services |
-| GitHub Actions CI for both services on Java 21 | `.github/workflows/ci.yml` |
-| Actuator health/info (order-service only) | `order-service` `application.properties` |
-
-### Planned / not implemented
-
-These appear in the project's goals but have **no code in this repository**:
-
-- **payment-service** — planned only; nothing is implemented.
-- **notification-service** — planned only.
-- **Multi-item reservation semantics** — an order transitions on its first
-  inventory event, not once every item is accounted for.
-- Retry policy, dead-letter topics, and consumer error handlers.
-- Idempotency/dedupe on the order-service side of the loop.
+- **notification-service** — no code in this repository.
 - Redis or any distributed cache.
-- Continuous **deployment** and cloud infrastructure (CI itself is implemented).
-- Load testing.
-- Metrics/tracing beyond the actuator health and info endpoints.
-- An API or migration for seeding and managing `inventory_items`.
+- Metrics/tracing beyond Actuator health and info on order-service.
+- Load testing, continuous **deployment**, and cloud infrastructure (CI itself
+  is implemented).
+- A real payment provider — the gateway is explicitly simulated; the
+  `PaymentGateway` interface is the seam for a real integration.
