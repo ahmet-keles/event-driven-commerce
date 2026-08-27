@@ -1,7 +1,10 @@
 package com.ahmetkeles.orderservice.api;
 
 import com.ahmetkeles.orderservice.PostgreSQLIntegrationTest;
+import com.ahmetkeles.orderservice.domain.Order;
+import com.ahmetkeles.orderservice.outbox.OutboxEventRepository;
 import com.ahmetkeles.orderservice.repository.OrderRepository;
+import com.ahmetkeles.orderservice.service.OrderService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -9,7 +12,11 @@ import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 
+import java.math.BigDecimal;
+import java.time.Instant;
 import java.util.UUID;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
 
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
@@ -31,6 +38,12 @@ class OrderApiIntegrationTest extends PostgreSQLIntegrationTest {
 
     @Autowired
     private OrderRepository orderRepository;
+
+    @Autowired
+    private OrderService orderService;
+
+    @Autowired
+    private OutboxEventRepository outboxEventRepository;
 
     @BeforeEach
     void clearOrders() {
@@ -129,6 +142,85 @@ class OrderApiIntegrationTest extends PostgreSQLIntegrationTest {
                         .content(itemRequest(UUID.randomUUID(), 1, "1.00")))
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.error").value("not_found"));
+    }
+
+    @Test
+    void rejectsAddingItemToCancelledOrder() throws Exception {
+        UUID orderId = createOrder(UUID.randomUUID());
+
+        mockMvc.perform(post("/api/orders/{orderId}/items", orderId)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(itemRequest(UUID.randomUUID(), 2, "15.00")))
+                .andExpect(status().isOk());
+
+        orderService.cancelOrder(orderId);
+
+        Order before = orderRepository.findWithItemsById(orderId).orElseThrow();
+        Long versionBefore = before.getVersion();
+        Instant updatedAtBefore = before.getUpdatedAt();
+        BigDecimal totalBefore = before.getTotalAmount();
+        long itemAddedEventsBefore = itemAddedEventCount(orderId);
+
+        mockMvc.perform(post("/api/orders/{orderId}/items", orderId)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(itemRequest(UUID.randomUUID(), 1, "5.00")))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.error").value("order_not_modifiable"));
+
+        Order after = orderRepository.findWithItemsById(orderId).orElseThrow();
+        assertEquals("CANCELLED", after.getStatus().name());
+        assertEquals(versionBefore, after.getVersion());
+        assertEquals(updatedAtBefore, after.getUpdatedAt());
+        assertEquals(0, totalBefore.compareTo(after.getTotalAmount()));
+        assertEquals(1, after.getItems().size());
+        assertEquals(itemAddedEventsBefore, itemAddedEventCount(orderId));
+    }
+
+    @Test
+    void rejectsAddingItemToConfirmedOrder() throws Exception {
+        UUID orderId = createOrder(UUID.randomUUID());
+
+        String response = mockMvc.perform(post("/api/orders/{orderId}/items", orderId)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(itemRequest(UUID.randomUUID(), 2, "15.00")))
+                .andExpect(status().isOk())
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+
+        UUID itemId = UUID.fromString(
+                objectMapper.readTree(response)
+                        .get("items").get(0).get("id").asText());
+
+        orderService.markItemReserved(orderId, itemId);
+
+        Order before = orderRepository.findWithItemsById(orderId).orElseThrow();
+        assertEquals("CONFIRMED", before.getStatus().name());
+        Long versionBefore = before.getVersion();
+        Instant updatedAtBefore = before.getUpdatedAt();
+        BigDecimal totalBefore = before.getTotalAmount();
+        long itemAddedEventsBefore = itemAddedEventCount(orderId);
+
+        mockMvc.perform(post("/api/orders/{orderId}/items", orderId)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(itemRequest(UUID.randomUUID(), 1, "5.00")))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.error").value("order_not_modifiable"));
+
+        Order after = orderRepository.findWithItemsById(orderId).orElseThrow();
+        assertEquals("CONFIRMED", after.getStatus().name());
+        assertEquals(versionBefore, after.getVersion());
+        assertEquals(updatedAtBefore, after.getUpdatedAt());
+        assertEquals(0, totalBefore.compareTo(after.getTotalAmount()));
+        assertEquals(1, after.getItems().size());
+        assertEquals(itemAddedEventsBefore, itemAddedEventCount(orderId));
+    }
+
+    private long itemAddedEventCount(UUID orderId) {
+        return outboxEventRepository.findAll().stream()
+                .filter(event -> orderId.equals(event.getAggregateId()))
+                .filter(event -> "ORDER_ITEM_ADDED".equals(event.getEventType()))
+                .count();
     }
 
     private UUID createOrder(UUID customerId) throws Exception {

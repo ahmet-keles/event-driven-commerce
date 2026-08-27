@@ -148,6 +148,54 @@ class OrderServiceTest {
     }
 
     @Test
+    void addingItemToCancelledOrderThrowsAndWritesNoOutboxEvent() {
+        UUID orderId = UUID.randomUUID();
+        Order order = new Order(UUID.randomUUID(), "USD");
+        order.cancel();
+
+        when(orderRepository.findWithItemsById(orderId))
+                .thenReturn(Optional.of(order));
+
+        assertThrows(
+                com.ahmetkeles.orderservice.domain.OrderNotModifiableException.class,
+                () -> orderService.addItem(
+                        orderId,
+                        UUID.randomUUID(),
+                        1,
+                        new BigDecimal("10.00")
+                )
+        );
+
+        assertTrue(order.getItems().isEmpty());
+        verify(outboxEventRepository, never()).save(any(OutboxEvent.class));
+    }
+
+    @Test
+    void addingItemToConfirmedOrderThrowsAndWritesNoOutboxEvent() {
+        UUID orderId = UUID.randomUUID();
+        Order order = new Order(UUID.randomUUID(), "USD");
+        OrderItem item = order.addItem(
+                UUID.randomUUID(), 1, new BigDecimal("10.00"));
+        order.markItemReserved(item.getId());
+
+        when(orderRepository.findWithItemsById(orderId))
+                .thenReturn(Optional.of(order));
+
+        assertThrows(
+                com.ahmetkeles.orderservice.domain.OrderNotModifiableException.class,
+                () -> orderService.addItem(
+                        orderId,
+                        UUID.randomUUID(),
+                        1,
+                        new BigDecimal("10.00")
+                )
+        );
+
+        assertEquals(1, order.getItems().size());
+        verify(outboxEventRepository, never()).save(any(OutboxEvent.class));
+    }
+
+    @Test
     void cancellingUnknownOrderThrows() {
         UUID orderId = UUID.randomUUID();
 
