@@ -23,6 +23,7 @@ jobs:
         service:
           - inventory-service
           - order-service
+          - payment-service
 
     steps:
       - name: Check out repository
