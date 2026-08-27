@@ -1,11 +1,13 @@
 package com.ahmetkeles.orderservice.outbox;
 
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Instant;
 import java.util.Collection;
 import java.util.List;
 import java.util.UUID;
@@ -79,5 +81,39 @@ public interface OutboxEventRepository extends JpaRepository<OutboxEvent, UUID> 
     )
     List<UUID> findOldestPendingEventIds(
             @Param("aggregateIds") Collection<UUID> aggregateIds
+    );
+
+    /**
+     * Deletes one bounded batch of published outbox rows older than the
+     * cutoff, oldest first. Unpublished rows are structurally excluded by the
+     * {@code published_at IS NOT NULL} predicate — retention can never remove
+     * an undelivered event.
+     *
+     * <p>{@code FOR UPDATE SKIP LOCKED} in the selecting subquery makes the
+     * batch safe alongside concurrent replicas (each claims disjoint victims)
+     * and keeps retention from ever waiting on the publisher, whose claim
+     * transaction only locks unpublished rows. Requires the caller's
+     * transaction so the lock-and-delete pair stays atomic and short.
+     */
+    @Transactional(propagation = Propagation.MANDATORY)
+    @Modifying
+    @Query(
+            value = """
+                    DELETE FROM outbox_events
+                    WHERE id IN (
+                        SELECT id
+                        FROM outbox_events
+                        WHERE published_at IS NOT NULL
+                          AND published_at < :cutoff
+                        ORDER BY published_at ASC, id ASC
+                        LIMIT :batchSize
+                        FOR UPDATE SKIP LOCKED
+                    )
+                    """,
+            nativeQuery = true
+    )
+    int deletePublishedBatch(
+            @Param("cutoff") Instant cutoff,
+            @Param("batchSize") int batchSize
     );
 }
