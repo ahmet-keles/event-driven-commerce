@@ -257,6 +257,46 @@ no-ops on an order that is no longer `PENDING` — the first event to arrive
 decides the outcome. Any future consumer logic that is not naturally idempotent
 will need real de-duplication.
 
+## Retention (inventory-service)
+
+`RetentionCleanupJob` deletes two kinds of bookkeeping rows on a schedule
+(`app.retention.*` in `application.properties`):
+
+- **Published outbox rows** older than `published-outbox-max-age` (default 7d,
+  measured from `published_at`). **Unpublished rows are never deleted at any
+  age** — the delete predicate requires a non-null `published_at`, so no
+  configuration can reach an event the broker has not acknowledged.
+- **`processed_events` rows** older than `processed-events-max-age`
+  (default 30d).
+
+Every `DELETE` is bounded by `batch-size` (`LIMIT` in the statement) and a run
+issues at most `max-batches-per-run` batches per table, each in its own short
+transaction; a larger backlog drains across successive runs. Batches claim
+their rows with `FOR UPDATE SKIP LOCKED`, so multiple replicas running cleanup
+concurrently partition eligible rows instead of contending — and never touch
+the publisher's working set, whose locks cover only unpublished rows.
+
+### Replay and idempotency implications
+
+- **The outbox is not the replay log — Kafka is.** Once a row is published,
+  replaying the flow means re-consuming the topic, not re-publishing the
+  outbox. Deleting published rows therefore costs operational forensics only;
+  size `published-outbox-max-age` to the debugging window you want.
+- **`processed-events-max-age` bounds the deduplication window.** Deleting a
+  `processed_events` row re-opens idempotency for that event id: a duplicate
+  delivered afterwards is processed as new. This age **MUST exceed the Kafka
+  source topic's retention + the worst-case consumer lag + the operational
+  replay / DLT-redrive window** — anyone raising any of those horizons must
+  raise it in step. A replay of events older than the window will re-execute
+  their effects; for reservations the ledger's per-item key
+  (`inventory_reservations.order_item_id`) and the cancelled-order guard still
+  stop double stock mutation, but the general guarantee is gone.
+- **Dangerous configuration refuses to boot.** The retention bounds are
+  bean-validated at startup (`@Validated` on `RetentionProperties`): a zero or
+  negative age or batch bound fails binding instead of running — a negative
+  max age would place the cutoff in the future and make nearly every
+  bookkeeping row deletable in one sweep.
+
 ## Failure behavior
 
 | Situation | What happens today |

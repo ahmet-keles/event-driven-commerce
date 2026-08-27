@@ -2,6 +2,7 @@ package com.ahmetkeles.inventoryservice;
 
 import com.ahmetkeles.inventoryservice.inventory.InventoryItem;
 import com.ahmetkeles.inventoryservice.inventory.InventoryItemRepository;
+import com.ahmetkeles.inventoryservice.inventory.InventoryReservationRepository;
 import com.ahmetkeles.inventoryservice.inventory.ProcessedEventRepository;
 import com.ahmetkeles.inventoryservice.messaging.InvalidEventException;
 import com.ahmetkeles.inventoryservice.messaging.OrderEventEnvelope;
@@ -196,12 +197,16 @@ class KafkaDeadLetterIntegrationTest {
     private ProcessedEventRepository processedEventRepository;
 
     @Autowired
+    private InventoryReservationRepository inventoryReservationRepository;
+
+    @Autowired
     private OutboxEventRepository outboxEventRepository;
 
     @BeforeEach
     void cleanDatabase() {
         outboxEventRepository.deleteAll();
         processedEventRepository.deleteAll();
+        inventoryReservationRepository.deleteAll();
         inventoryItemRepository.deleteAll();
     }
 
