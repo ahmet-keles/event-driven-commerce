@@ -1,8 +1,9 @@
 # Local development infrastructure only.
 #
-# The Spring Boot services are run on the host (see README), so this file only
-# provides the backing stores and the broker they connect to over published
-# ports. Variables come from `.env` (copy `.env.example`), which is the single
+# order-service and inventory-service are run on the host (see
+# docs/DEVELOPMENT.md); this file provides the backing stores and the broker
+# they connect to over published ports, plus the payment-service container.
+# Variables come from `.env` (copy `.env.example`), which is the single
 # source of truth shared by Compose and the applications.
 #
 # Images are multi-arch (linux/amd64 + linux/arm64), so no `platform:` override
@@ -59,6 +60,53 @@ services:
       retries: 10
       start_period: 15s
 
+  payment-postgres:
+    image: postgres:17-alpine
+    container_name: commerce-payment-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${PAYMENT_POSTGRES_DB:-payment}
+      POSTGRES_USER: ${PAYMENT_POSTGRES_USER:-payment_user}
+      POSTGRES_PASSWORD: ${PAYMENT_POSTGRES_PASSWORD:?PAYMENT_POSTGRES_PASSWORD is required - copy .env.example to .env}
+    ports:
+      - "${PAYMENT_POSTGRES_PORT:-5435}:5432"
+    volumes:
+      - payment_postgres_data:/var/lib/postgresql/data
+    networks:
+      - commerce
+    healthcheck:
+      test:
+        - "CMD-SHELL"
+        - "pg_isready -h 127.0.0.1 -p 5432 -U ${PAYMENT_POSTGRES_USER:-payment_user} -d ${PAYMENT_POSTGRES_DB:-payment}"
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+
+  payment-service:
+    build: services/payment-service
+    container_name: commerce-payment-service
+    restart: unless-stopped
+    environment:
+      # In-network addresses: the sibling containers, not the published ports.
+      PAYMENT_POSTGRES_HOST: payment-postgres
+      PAYMENT_POSTGRES_PORT: 5432
+      PAYMENT_POSTGRES_DB: ${PAYMENT_POSTGRES_DB:-payment}
+      PAYMENT_POSTGRES_USER: ${PAYMENT_POSTGRES_USER:-payment_user}
+      PAYMENT_POSTGRES_PASSWORD: ${PAYMENT_POSTGRES_PASSWORD:?PAYMENT_POSTGRES_PASSWORD is required - copy .env.example to .env}
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+    depends_on:
+      payment-postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    networks:
+      - commerce
+    # No container healthcheck: the service deliberately exposes no HTTP
+    # surface (no actuator), so there is nothing meaningful to probe.
+    # Readiness ordering comes from the depends_on conditions above; verify
+    # liveness through `docker compose logs payment-service`.
+
   kafka:
     image: apache/kafka:4.0.0
     container_name: commerce-kafka
@@ -101,6 +149,7 @@ services:
 volumes:
   postgres_data:
   inventory_postgres_data:
+  payment_postgres_data:
   kafka_data:
 
 networks:

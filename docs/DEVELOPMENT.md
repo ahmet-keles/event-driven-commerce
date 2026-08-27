@@ -25,12 +25,13 @@ docker info      # must succeed; the daemon has to be running
 ## Repository layout
 
 ```
-compose.yaml                    postgres, inventory-postgres, kafka
+compose.yaml                    postgres, inventory-postgres, payment-postgres, kafka
 .env.example                    template for local secrets/config
 .github/workflows/ci.yml        CI: both test suites on Java 21
 docs/                           this documentation
 services/order-service/         Spring Boot app, REST API + Kafka
 services/inventory-service/     Spring Boot app, Kafka only (no HTTP)
+services/payment-service/       Spring Boot app, Kafka only (no HTTP)
 ```
 
 ## 1. Configure environment variables
@@ -56,7 +57,12 @@ the services when you run them on the host. Every variable in
 | `INVENTORY_POSTGRES_PASSWORD` | compose `inventory-postgres`, inventory-service | **Compose fails fast**; no default |
 | `INVENTORY_POSTGRES_HOST` | inventory-service | `127.0.0.1` |
 | `INVENTORY_POSTGRES_PORT` | compose host port mapping, inventory-service | `5434` on both sides |
-| `KAFKA_BOOTSTRAP_SERVERS` | both services | `localhost:29092` |
+| `PAYMENT_POSTGRES_DB` | compose `payment-postgres`, payment-service | `payment` |
+| `PAYMENT_POSTGRES_USER` | compose `payment-postgres`, payment-service | `payment_user` |
+| `PAYMENT_POSTGRES_PASSWORD` | compose `payment-postgres`, payment-service | **Compose fails fast**; no default |
+| `PAYMENT_POSTGRES_HOST` | payment-service on the host | `127.0.0.1` |
+| `PAYMENT_POSTGRES_PORT` | compose host port mapping | `5435` on both sides |
+| `KAFKA_BOOTSTRAP_SERVERS` | all services | `localhost:29092` |
 
 The three passwords/identities marked *fails fast* use Compose's
 `${VAR:?message}` form, so `docker compose up` stops with a readable error
@@ -74,14 +80,16 @@ docker compose up -d --wait
 ```
 
 `--wait` blocks until every container reports healthy, so the services you start
-next never race a database that is still running `initdb`. That starts three
-containers on the `commerce-net` bridge network, all with
+next never race a database that is still running `initdb`. That starts the
+containers below on the `commerce-net` bridge network, all with
 `restart: unless-stopped`:
 
 | Compose service | Container | Host port | Healthcheck |
 |---|---|---|---|
 | `postgres` | `commerce-postgres` | `${POSTGRES_PORT:-5433}` → 5432 | `pg_isready` over TCP, 15 s start period |
 | `inventory-postgres` | `commerce-inventory-postgres` | `${INVENTORY_POSTGRES_PORT:-5434}` → 5432 | `pg_isready` over TCP, 15 s start period |
+| `payment-postgres` | `commerce-payment-postgres` | `${PAYMENT_POSTGRES_PORT:-5435}` → 5432 | `pg_isready` over TCP, 15 s start period |
+| `payment-service` | `commerce-payment-service` | — (no HTTP surface) | none — gated by `depends_on: service_healthy` on `payment-postgres` and `kafka` |
 | `kafka` | `commerce-kafka` | `29092` (EXTERNAL listener) | `kafka-broker-api-versions.sh`, 30 s start period |
 
 The PostgreSQL healthchecks probe `127.0.0.1:5432` rather than the unix socket
@@ -92,8 +100,8 @@ connections.
 Kafka runs as a single-node KRaft cluster (broker + controller in one process)
 with 3 default partitions per topic, and `KAFKA_LOG_DIRS` pointed at the
 `kafka_data` volume — so **topics and consumer offsets survive
-`docker compose down`** along with both databases' data. Use
-`docker compose down -v` to wipe all three volumes and start clean. The broker
+`docker compose down`** along with all databases' data. Use
+`docker compose down -v` to wipe every volume and start clean. The broker
 gets a 30 s `stop_grace_period` for an orderly shutdown.
 
 To bring up only part of the stack, name the services:
@@ -131,19 +139,31 @@ curl http://localhost:8080/actuator/health
 Exercise the API:
 
 ```bash
-# create an order
+# 1. create an order
 curl -s -X POST http://localhost:8080/api/orders \
   -H 'Content-Type: application/json' \
   -d '{"customerId":"11111111-1111-1111-1111-111111111111","currency":"USD"}'
 
-# add an item (drives the inventory reservation flow)
+# 2. add an item (drives the inventory reservation flow)
 curl -s -X POST http://localhost:8080/api/orders/<ORDER_ID>/items \
   -H 'Content-Type: application/json' \
   -d '{"productId":"22222222-2222-2222-2222-222222222222","quantity":2,"unitPrice":9.99}'
 
-# read it back — CONFIRMED once inventory reserves, CANCELLED if it cannot
+# 3. submit the order — assembly is finished, no more items coming
+curl -s -X POST http://localhost:8080/api/orders/<ORDER_ID>/submit
+
+# 4. read the final state
 curl -s http://localhost:8080/api/orders/<ORDER_ID>
 ```
+
+An order is confirmed only once it has been **submitted and every item is
+reserved** — inventory reservation alone never confirms it; whichever of the
+two happens last performs the transition. Confirmation then publishes
+`ORDER_CONFIRMED` and starts the payment leg, so the state you read back
+settles as CONFIRMED with `paymentStatus` COMPLETED (charge approved),
+CANCELLED with `paymentStatus` FAILED (charge declined — the compensation
+also releases the reserved stock), or CANCELLED if inventory could not be
+reserved at all.
 
 ## 4. Run inventory-service
 
@@ -162,6 +182,52 @@ set +a
 This service has **no HTTP endpoint and no actuator** — it is a Kafka
 consumer/publisher process. Verify it by watching its log (`Reserved inventory
 for order …`) or by querying its database.
+
+## 5. payment-service
+
+Unlike the other two services, payment-service **runs as a Compose container by
+default** — `docker compose up -d --wait` builds it from
+`services/payment-service/Dockerfile` (multi-stage: the boot jar is built
+inside the image, so no host toolchain is involved) and starts it once
+`payment-postgres` and `kafka` are healthy. Inside the network it talks to
+`payment-postgres:5432` and the broker's internal listener `kafka:9092`;
+the `PAYMENT_POSTGRES_*` variables from `.env` apply to both the container
+and a host run.
+
+For a faster dev loop you can run it on the host instead — stop the container
+first so two instances don't compete in the same consumer group:
+
+```bash
+docker compose stop payment-service
+
+cd services/payment-service
+
+set -a
+source ../../.env
+set +a
+
+./mvnw spring-boot:run
+```
+
+Like inventory-service, this is a Kafka consumer/publisher process with **no
+HTTP endpoint and no actuator** — which is also why its container declares no
+healthcheck: there is nothing meaningful to probe, so its readiness ordering
+comes from `depends_on` and its liveness from
+`docker compose logs -f payment-service`. It consumes `ORDER_CONFIRMED` from
+`order.events`, charges through the **simulated** gateway, records the result
+in its `payments` table (at most one payment per order, enforced by a unique
+constraint), and publishes `PAYMENT_COMPLETED` or `PAYMENT_FAILED` to
+`payment.events` — which order-service consumes and deduplicates by eventId.
+
+The gateway is deterministic and never touches real money: totals **strictly
+below** `app.payment.gateway.decline-threshold` (default `1000.00`) are
+approved, totals at or above it are declined. So a `2 × 9.99` order pays
+successfully, while a single item at `1000.00` produces a `PAYMENT_FAILED`
+with a decline reason — useful for exercising both saga branches on purpose.
+
+Verify it by watching its log (`Recorded completed payment …` /
+`Recorded failed payment …` on the order-service side) or by querying its
+database (see below).
 
 ## Seeding inventory
 
@@ -193,7 +259,12 @@ docker exec -it commerce-inventory-postgres psql -U inventory_user -d inventory 
   -c "SELECT * FROM inventory_items;" \
   -c "SELECT event_id, event_type FROM processed_events ORDER BY processed_at DESC LIMIT 10;"
 
-# topic contents
+# payments and the payment outbox
+docker exec -it commerce-payment-postgres psql -U payment_user -d payment \
+  -c "SELECT order_id, amount, status, failure_reason FROM payments ORDER BY created_at DESC LIMIT 5;" \
+  -c "SELECT event_type, published_at FROM outbox_events ORDER BY occurred_at DESC LIMIT 10;"
+
+# topic contents (also works for inventory.events and payment.events)
 docker exec -it commerce-kafka \
   /opt/kafka/bin/kafka-console-consumer.sh \
   --bootstrap-server localhost:9092 --topic order.events --from-beginning
@@ -209,13 +280,10 @@ each test registers its container's JDBC URL and bootstrap servers through
 `@DynamicPropertySource`, so no environment variables are required.
 
 ```bash
-# order-service — 45 tests
-cd services/order-service
-./mvnw test
-
-# inventory-service — 22 tests
-cd services/inventory-service
-./mvnw test
+# from the repository root, one suite at a time
+(cd services/order-service && ./mvnw test)
+(cd services/inventory-service && ./mvnw test)
+(cd services/payment-service && ./mvnw test)
 ```
 
 Run a single class or method with the Surefire filter:
@@ -274,7 +342,8 @@ Run a single class or method with the Surefire filter:
 `.github/workflows/ci.yml` runs on every push to `main` and every pull request
 targeting `main`:
 
-- A matrix job per service (`inventory-service`, `order-service`) on
+- A matrix job per service (`inventory-service`, `order-service`,
+  `payment-service`) on
   `ubuntu-latest`, with `fail-fast: false` so both results are always reported —
   the workflow still fails if either service fails.
 - An independent `e2e` job that builds both boot jars and runs the

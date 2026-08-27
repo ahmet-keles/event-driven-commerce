@@ -17,7 +17,8 @@ Implemented and running today:
 
 - **Order Service** — REST API (`/api/orders`), PostgreSQL persistence, transactional outbox, Kafka producer and consumer, Actuator health
 - **Inventory Service** — Kafka consumer/producer with its own PostgreSQL database, idempotent stock reservation, transactional outbox (no HTTP API)
-- **Apache Kafka** — single-node KRaft broker; topics `order.events` and `inventory.events`
+- **Payment Service** — Kafka consumer/producer with its own PostgreSQL database and a simulated payment gateway, transactional outbox (no HTTP API); runs as a Compose container
+- **Apache Kafka** — single-node KRaft broker; topics `order.events`, `inventory.events`, and `payment.events`
 - **PostgreSQL** — one database per service, schema managed by Flyway
 - **Docker Compose** — local infrastructure with healthchecks and persistent volumes
 - **Testcontainers** — integration tests against real PostgreSQL and Kafka
@@ -26,11 +27,13 @@ Implemented and running today:
 The end-to-end flow that works today: adding an item to an order publishes
 `ORDER_ITEM_ADDED`; the inventory service either reserves stock and publishes
 `INVENTORY_RESERVED` — confirming the order — or publishes
-`INVENTORY_RESERVATION_FAILED`, which cancels it.
+`INVENTORY_RESERVATION_FAILED`, which cancels it. A confirmed order then
+publishes `ORDER_CONFIRMED`; the payment service charges it through a simulated
+gateway and publishes `PAYMENT_COMPLETED` or `PAYMENT_FAILED`, which the order
+service records idempotently.
 
 ## Planned Services
 
-- Payment Service (not implemented)
 - Notification Service (not implemented)
 
 ## Planned Infrastructure
@@ -58,7 +61,7 @@ Still to come:
 - Distributed caching
 - Observability and metrics beyond Actuator health
 - Load testing
-- Payment and notification services
+- Notification service
 - Cloud deployment
 
 ## Tech Stack
@@ -86,10 +89,12 @@ inspecting state, are in [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
 
 ```bash
 cp .env.example .env          # then fill in your local values
-docker compose up -d --wait   # postgres, inventory-postgres, kafka
+docker compose up -d --wait   # three databases, kafka, payment-service
 ```
 
-`--wait` returns once all three containers report healthy. Data lives in named
+`--wait` returns once every container is up and each healthcheck passes (the
+payment-service container is built from `services/payment-service/Dockerfile`
+on first use). Data lives in named
 volumes and survives `docker compose down`; use `down -v` to wipe it.
 
 The databases publish on `POSTGRES_PORT` (default `5433`) and
