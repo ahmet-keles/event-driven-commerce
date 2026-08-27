@@ -8,6 +8,7 @@ import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 class OrderTest {
@@ -194,6 +195,22 @@ class OrderTest {
         order.cancel();
 
         assertEquals(OrderStatus.CANCELLED, order.getStatus());
+    }
+
+    @Test
+    void cancelReportsWhetherTheTransitionHappened() {
+        Order order = new Order(UUID.randomUUID(), "USD");
+
+        assertTrue(order.cancel(), "first cancel performs the transition");
+        assertFalse(order.cancel(), "second cancel is a true no-op");
+
+        Order confirmed = new Order(UUID.randomUUID(), "USD");
+        OrderItem item = confirmed.addItem(
+                UUID.randomUUID(), 1, new BigDecimal("10.00"));
+        confirmed.markItemReserved(item.getId());
+
+        assertFalse(confirmed.cancel(),
+                "a confirmed order reports no transition");
     }
 
     @Test

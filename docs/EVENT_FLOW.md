@@ -11,9 +11,10 @@ For the bigger picture see [ARCHITECTURE.md](ARCHITECTURE.md).
 | `order.events` | order-service `OutboxPublisher` | inventory-service `OrderEventsConsumer` (group `inventory-service`) | 3 / 1 | order id |
 | `inventory.events` | inventory-service `OutboxPublisher` | order-service `InventoryEventsConsumer` (group `order-service`) | 3 / 1 | order id |
 
-Four event types flow across them today: `ORDER_CREATED` and
-`ORDER_ITEM_ADDED` on `order.events`, and `INVENTORY_RESERVED` /
-`INVENTORY_RESERVATION_FAILED` on `inventory.events`.
+Five event types flow across them today: `ORDER_CREATED`,
+`ORDER_ITEM_ADDED`, and `ORDER_CANCELLED` on `order.events`, and
+`INVENTORY_RESERVED` / `INVENTORY_RESERVATION_FAILED` on
+`inventory.events`.
 
 Topic names come from configuration, not from constants in code:
 
@@ -262,8 +263,17 @@ does not throw and the order ends up `CANCELLED`. What is still missing is
 recovery from genuine errors — no `DefaultErrorHandler`, retry topic, or
 dead-letter topic is configured in either service, so Spring Kafka's
 out-of-the-box error handling applies to anything a listener does throw. Retry
-policy and DLQs remain **planned, not implemented**, as does releasing stock
-that was reserved for an order later cancelled by a different item's failure.
+policy and DLQs remain **planned, not implemented**.
+
+Stock reserved for an order that later cancels is released: the
+`PENDING -> CANCELLED` transition writes an `ORDER_CANCELLED` outbox row
+(payload: the order id only) in the same transaction, and inventory-service —
+which records every successful reservation in its `inventory_reservations`
+ledger, keyed by order item id — marks the order cancelled in its
+`order_inventory_state` table and returns each still-`RESERVED` quantity to
+the available pool, all in one transaction. Both the reserve and the release
+path lock the order's state row first, so a late `ORDER_ITEM_ADDED` arriving
+after the cancellation reserves nothing instead of leaking stock.
 
 ## Consumer configuration
 

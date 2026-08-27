@@ -184,8 +184,10 @@ Behavior worth knowing, as currently coded:
   by the first failed one.
 - `addItem` has no status guard: items can still be added to a `CONFIRMED` or
   `CANCELLED` order, and doing so emits another `ORDER_ITEM_ADDED` event.
-- Cancelling an order does **not** release stock reserved for its other items;
-  there is no compensating release path yet.
+- Cancelling an order triggers compensation: the transition emits an
+  `ORDER_CANCELLED` event, and inventory-service releases every reservation it
+  still holds for that order from its own reservation ledger (see
+  [EVENT_FLOW.md](EVENT_FLOW.md)).
 
 ## Inventory reservation flow
 
@@ -267,9 +269,6 @@ These appear in the project's goals but have **no code in this repository**:
 - **notification-service** — planned only.
 - **Multi-item reservation semantics** — an order transitions on its first
   inventory event, not once every item is accounted for.
-- **Releasing reserved stock** — nothing decrements `reserved_quantity`, so a
-  cancelled order's already-reserved items stay reserved. No compensating or
-  saga-style rollback exists.
 - Retry policy, dead-letter topics, and consumer error handlers.
 - Idempotency/dedupe on the order-service side of the loop.
 - Redis or any distributed cache.

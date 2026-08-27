@@ -21,6 +21,7 @@ final class Fixtures {
 
     static final String ORDER_CREATED = "order-created.envelope.json";
     static final String ORDER_ITEM_ADDED = "order-item-added.envelope.json";
+    static final String ORDER_CANCELLED = "order-cancelled.envelope.json";
     static final String INVENTORY_RESERVED = "inventory-reserved.envelope.json";
     static final String INVENTORY_RESERVATION_FAILED =
             "inventory-reservation-failed.envelope.json";

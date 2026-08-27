@@ -146,6 +146,23 @@ class WireContractTest {
         assertEquals(
                 Fixtures.payloadOf(fixture).get("reason").asText(),
                 failedPayload.get("reason").asText());
+
+        // The failed reservation cancels the order, which must announce the
+        // cancellation on the order topic in the documented shape: an
+        // orderId-only payload, because inventory releases from its own
+        // ledger rather than from event content.
+        JsonNode cancelled = topics.awaitEnvelope(
+                E2eStack.ORDER_TOPIC,
+                "ORDER_CANCELLED for " + orderId,
+                Topics.envelopeFor(orderId, "ORDER_CANCELLED"),
+                WAIT);
+
+        assertSameShape(Fixtures.load(Fixtures.ORDER_CANCELLED), cancelled);
+        ObjectNode cancelledPayload = Fixtures.payloadOf(cancelled);
+        assertEquals(orderId.toString(),
+                cancelledPayload.get("orderId").asText());
+        assertEquals(1, cancelledPayload.size(),
+                "ORDER_CANCELLED must not grow item or quantity fields");
     }
 
     private void injectedOrderItemAddedFixtureIsAcceptedByInventory() {

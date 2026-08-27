@@ -10,6 +10,8 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import tools.jackson.databind.ObjectMapper;
 
+import java.time.Instant;
+import java.util.List;
 import java.util.UUID;
 
 @Service
@@ -31,17 +33,23 @@ public class InventoryReservationService {
     private final InventoryItemRepository inventoryItemRepository;
     private final ProcessedEventRepository processedEventRepository;
     private final OutboxEventRepository outboxEventRepository;
+    private final InventoryReservationRepository inventoryReservationRepository;
+    private final OrderInventoryStateRepository orderInventoryStateRepository;
     private final ObjectMapper objectMapper;
 
     public InventoryReservationService(
             InventoryItemRepository inventoryItemRepository,
             ProcessedEventRepository processedEventRepository,
             OutboxEventRepository outboxEventRepository,
+            InventoryReservationRepository inventoryReservationRepository,
+            OrderInventoryStateRepository orderInventoryStateRepository,
             ObjectMapper objectMapper
     ) {
         this.inventoryItemRepository = inventoryItemRepository;
         this.processedEventRepository = processedEventRepository;
         this.outboxEventRepository = outboxEventRepository;
+        this.inventoryReservationRepository = inventoryReservationRepository;
+        this.orderInventoryStateRepository = orderInventoryStateRepository;
         this.objectMapper = objectMapper;
     }
 
@@ -55,6 +63,37 @@ public class InventoryReservationService {
             int quantity
     ) {
         if (processedEventRepository.existsById(eventId)) {
+            return;
+        }
+
+        OrderInventoryState state = lockOrderState(orderId);
+
+        if (state.isCancelled()) {
+            log.info(
+                    "Skipping reservation for cancelled order {}, item {}, product {}: no stock mutated",
+                    orderId,
+                    orderItemId,
+                    productId
+            );
+
+            processedEventRepository.save(
+                    new ProcessedEvent(eventId, eventType)
+            );
+
+            return;
+        }
+
+        if (inventoryReservationRepository.existsById(orderItemId)) {
+            log.warn(
+                    "Order item {} already holds a reservation; skipping event {} without reserving again",
+                    orderItemId,
+                    eventId
+            );
+
+            processedEventRepository.save(
+                    new ProcessedEvent(eventId, eventType)
+            );
+
             return;
         }
 
@@ -95,6 +134,16 @@ public class InventoryReservationService {
                 new ProcessedEvent(eventId, eventType)
         );
 
+        inventoryReservationRepository.save(
+                new InventoryReservation(
+                        orderItemId,
+                        orderId,
+                        productId,
+                        quantity,
+                        eventId
+                )
+        );
+
         InventoryReservedEvent event =
                 new InventoryReservedEvent(
                         orderId,
@@ -111,6 +160,74 @@ public class InventoryReservationService {
                         serialize(event)
                 )
         );
+    }
+
+    /**
+     * Applies an ORDER_CANCELLED event: marks the order cancelled in this
+     * service's state table and returns every stock quantity the order still
+     * holds, all in one transaction. Release is driven entirely by the
+     * durable reservation ledger — the event carries no item details — so a
+     * duplicate cancellation, which finds no RESERVED rows left, moves
+     * nothing.
+     */
+    @Transactional
+    public void releaseForCancelledOrder(
+            UUID eventId,
+            String eventType,
+            UUID orderId
+    ) {
+        if (processedEventRepository.existsById(eventId)) {
+            return;
+        }
+
+        OrderInventoryState state = lockOrderState(orderId);
+        state.markCancelled();
+
+        List<InventoryReservation> reservations =
+                inventoryReservationRepository.findByOrderIdAndStatus(
+                        orderId,
+                        ReservationStatus.RESERVED
+                );
+
+        for (InventoryReservation reservation : reservations) {
+            InventoryItem item = inventoryItemRepository
+                    .findById(reservation.getProductId())
+                    .orElseThrow(() -> new IllegalStateException(
+                            "Reservation for order item "
+                                    + reservation.getOrderItemId()
+                                    + " references missing inventory item "
+                                    + reservation.getProductId()
+                    ));
+
+            item.release(reservation.getQuantity());
+            reservation.release();
+        }
+
+        processedEventRepository.save(
+                new ProcessedEvent(eventId, eventType)
+        );
+
+        log.info(
+                "Cancelled inventory state for order {}; released {} reservation(s)",
+                orderId,
+                reservations.size()
+        );
+    }
+
+    /**
+     * Upserts the order's state row and locks it. Every reserve/cancel
+     * decision for one order runs under this lock, so a late reservation can
+     * never slip past a concurrent release: whichever transaction wins the
+     * lock, the other sees its committed outcome.
+     */
+    private OrderInventoryState lockOrderState(UUID orderId) {
+        orderInventoryStateRepository.insertIfAbsent(orderId, Instant.now());
+
+        return orderInventoryStateRepository.lockByOrderId(orderId)
+                .orElseThrow(() -> new IllegalStateException(
+                        "order_inventory_state row missing after upsert for order "
+                                + orderId
+                ));
     }
 
     private void recordReservationFailed(

@@ -86,4 +86,45 @@ class InventoryItemTest {
                 )
         );
     }
+
+    @Test
+    void releaseReturnsReservedStockToAvailable() {
+        InventoryItem item = new InventoryItem(UUID.randomUUID(), 10);
+        item.reserve(4);
+
+        item.release(4);
+
+        assertEquals(10, item.getAvailableQuantity());
+        assertEquals(0, item.getReservedQuantity());
+    }
+
+    @Test
+    void partialReleaseKeepsRemainingReservation() {
+        InventoryItem item = new InventoryItem(UUID.randomUUID(), 10);
+        item.reserve(4);
+
+        item.release(3);
+
+        assertEquals(9, item.getAvailableQuantity());
+        assertEquals(1, item.getReservedQuantity());
+    }
+
+    @Test
+    void rejectsReleasingMoreThanReserved() {
+        InventoryItem item = new InventoryItem(UUID.randomUUID(), 10);
+        item.reserve(2);
+
+        assertThrows(IllegalStateException.class, () -> item.release(3));
+        assertEquals(8, item.getAvailableQuantity());
+        assertEquals(2, item.getReservedQuantity());
+    }
+
+    @Test
+    void rejectsZeroOrNegativeRelease() {
+        InventoryItem item = new InventoryItem(UUID.randomUUID(), 10);
+        item.reserve(2);
+
+        assertThrows(IllegalArgumentException.class, () -> item.release(0));
+        assertThrows(IllegalArgumentException.class, () -> item.release(-1));
+    }
 }

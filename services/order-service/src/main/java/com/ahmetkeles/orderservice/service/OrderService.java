@@ -4,6 +4,7 @@ import com.ahmetkeles.orderservice.domain.Order;
 import com.ahmetkeles.orderservice.domain.OrderItem;
 import com.ahmetkeles.orderservice.outbox.OutboxEvent;
 import com.ahmetkeles.orderservice.outbox.OutboxEventRepository;
+import com.ahmetkeles.orderservice.outbox.event.OrderCancelledEvent;
 import com.ahmetkeles.orderservice.outbox.event.OrderCreatedEvent;
 import com.ahmetkeles.orderservice.outbox.event.OrderItemAddedEvent;
 import com.ahmetkeles.orderservice.repository.OrderRepository;
@@ -20,6 +21,7 @@ public class OrderService {
     private static final String AGGREGATE_TYPE = "Order";
     private static final String ORDER_CREATED = "ORDER_CREATED";
     private static final String ORDER_ITEM_ADDED = "ORDER_ITEM_ADDED";
+    private static final String ORDER_CANCELLED = "ORDER_CANCELLED";
 
     private final OrderRepository orderRepository;
     private final OutboxEventRepository outboxEventRepository;
@@ -67,10 +69,29 @@ public class OrderService {
         order.markItemReserved(orderItemId);
     }
 
+    /**
+     * The outbox row is written only when this call performed the
+     * PENDING -> CANCELLED transition, in the same transaction as the status
+     * change: a duplicate cancellation emits nothing, and a transaction that
+     * loses the optimistic-lock race rolls its outbox row back with the
+     * order mutation.
+     */
     @Transactional
     public void cancelOrder(UUID orderId) {
         Order order = findOrderWithItems(orderId);
-        order.cancel();
+
+        if (!order.cancel()) {
+            return;
+        }
+
+        OrderCancelledEvent event = new OrderCancelledEvent(order.getId());
+
+        outboxEventRepository.save(new OutboxEvent(
+                AGGREGATE_TYPE,
+                order.getId(),
+                ORDER_CANCELLED,
+                serialize(event)
+        ));
     }
 
     @Transactional
