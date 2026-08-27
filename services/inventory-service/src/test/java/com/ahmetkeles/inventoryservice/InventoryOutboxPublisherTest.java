@@ -156,9 +156,7 @@ class InventoryOutboxPublisherTest {
         assertNull(second.getPublishedAt());
 
         // The second event must not even be attempted: sending it after the
-        // first one failed would reorder this aggregate's stream — and for
-        // RESERVED/RESERVATION_FAILED that reorder flips the order's terminal
-        // state on the consuming side.
+        // first one failed would reorder this aggregate's stream.
         verify(kafkaTemplate, times(1))
                 .send(anyString(), anyString(), anyString());
     }

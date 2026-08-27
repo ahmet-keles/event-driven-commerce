@@ -74,11 +74,14 @@ import java.util.concurrent.TimeoutException;
  * claim transaction); a replica holding only a later event defers the
  * aggregate to a later poll instead of publishing it early.
  *
- * <p>That guard exists because the consumers are not reorder-tolerant: both
- * reservation outcomes ({@code INVENTORY_RESERVED} and
- * {@code INVENTORY_RESERVATION_FAILED}) key on the same orderId and drive
- * first-writer-wins transitions out of {@code PENDING}, so inverting them
- * would flip an order's terminal state.
+ * <p>Today's consumer converges regardless of outcome order: per-item
+ * reservation state plus the latching cancel make {@code INVENTORY_RESERVED}
+ * and {@code INVENTORY_RESERVATION_FAILED} commutative for an order's terminal
+ * state, so the guard is not load-bearing for current event types. It stays
+ * because per-aggregate order is the outbox's contract for whatever ships
+ * next — an {@code ORDER_CANCELLED}, payment authorization/capture, a
+ * reservation release are all sequence-dependent — and because it costs one
+ * indexed query per poll and can only defer, never publish early.
  */
 @Component
 @ConditionalOnProperty(

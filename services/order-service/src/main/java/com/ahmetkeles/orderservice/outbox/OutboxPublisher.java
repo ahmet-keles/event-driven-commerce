@@ -74,15 +74,15 @@ import java.util.concurrent.TimeoutException;
  * claim transaction); a replica holding only a later event defers the
  * aggregate to a later poll instead of publishing it early.
  *
- * <p>Today's {@code order.events} consumer happens to tolerate reorder — it
- * ignores {@code ORDER_CREATED} and treats each {@code ORDER_ITEM_ADDED} as an
- * independent, idempotent reservation — but the platform's contracts as a
- * whole do not: the reservation outcomes flowing back on
- * {@code inventory.events} drive first-writer-wins transitions out of
- * {@code PENDING}, where inversion flips an order's terminal state. The guard
- * is applied identically in both services so no future event type on this
- * topic (an {@code ORDER_CANCELLED}, a payment event) silently inherits an
- * unordered outbox.
+ * <p>Today's consumers converge regardless of publish order — this topic's
+ * consumer ignores {@code ORDER_CREATED} and treats each
+ * {@code ORDER_ITEM_ADDED} as an independent, idempotent reservation, and the
+ * reservation outcomes flowing back are commutative under per-item reservation
+ * state — so the guard is not load-bearing for current event types. It stays
+ * because per-aggregate order is the outbox's contract for whatever ships
+ * next — an {@code ORDER_CANCELLED}, payment authorization/capture, a
+ * reservation release are all sequence-dependent — and because it costs one
+ * indexed query per poll and can only defer, never publish early.
  */
 @Component
 @ConditionalOnProperty(
