@@ -1,5 +1,6 @@
 package com.ahmetkeles.orderservice.api;
 
+import com.ahmetkeles.orderservice.domain.EmptyOrderSubmissionException;
 import com.ahmetkeles.orderservice.domain.OrderNotModifiableException;
 import com.ahmetkeles.orderservice.service.OrderNotFoundException;
 import org.springframework.dao.OptimisticLockingFailureException;
@@ -24,6 +25,15 @@ public class RestExceptionHandler {
                 HttpStatus.CONFLICT,
                 "order_not_modifiable",
                 "Order can no longer be modified"
+        );
+    }
+
+    @ExceptionHandler(EmptyOrderSubmissionException.class)
+    public ResponseEntity<ApiError> handleEmptyOrderSubmission() {
+        return error(
+                HttpStatus.CONFLICT,
+                "order_empty",
+                "Order has no items to submit"
         );
     }
 

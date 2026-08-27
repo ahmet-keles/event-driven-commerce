@@ -44,6 +44,7 @@ class OrderServiceTest {
                 UUID.randomUUID(), 1, new BigDecimal("10.00"));
         OrderItem second = order.addItem(
                 UUID.randomUUID(), 1, new BigDecimal("20.00"));
+        order.submit();
 
         when(orderRepository.findWithItemsById(orderId))
                 .thenReturn(Optional.of(order));
@@ -135,6 +136,7 @@ class OrderServiceTest {
         Order order = new Order(UUID.randomUUID(), "USD");
         OrderItem item = order.addItem(
                 UUID.randomUUID(), 1, new BigDecimal("10.00"));
+        order.submit();
         order.markItemReserved(item.getId());
 
         when(orderRepository.findWithItemsById(orderId))
@@ -176,6 +178,7 @@ class OrderServiceTest {
         Order order = new Order(UUID.randomUUID(), "USD");
         OrderItem item = order.addItem(
                 UUID.randomUUID(), 1, new BigDecimal("10.00"));
+        order.submit();
         order.markItemReserved(item.getId());
 
         when(orderRepository.findWithItemsById(orderId))
@@ -193,6 +196,77 @@ class OrderServiceTest {
 
         assertEquals(1, order.getItems().size());
         verify(outboxEventRepository, never()).save(any(OutboxEvent.class));
+    }
+
+    @Test
+    void submittingOrderMarksItSubmittedWithoutOutboxEvents() {
+        UUID orderId = UUID.randomUUID();
+        Order order = new Order(UUID.randomUUID(), "USD");
+        order.addItem(UUID.randomUUID(), 1, new BigDecimal("10.00"));
+
+        when(orderRepository.findWithItemsById(orderId))
+                .thenReturn(Optional.of(order));
+
+        Order returned = orderService.submitOrder(orderId);
+
+        assertTrue(returned.isSubmitted());
+        assertEquals(
+                com.ahmetkeles.orderservice.domain.OrderStatus.PENDING,
+                returned.getStatus());
+        verify(outboxEventRepository, never()).save(any(OutboxEvent.class));
+    }
+
+    @Test
+    void submittingAlreadySubmittedOrderIsIdempotent() {
+        UUID orderId = UUID.randomUUID();
+        Order order = new Order(UUID.randomUUID(), "USD");
+        order.addItem(UUID.randomUUID(), 1, new BigDecimal("10.00"));
+
+        when(orderRepository.findWithItemsById(orderId))
+                .thenReturn(Optional.of(order));
+
+        orderService.submitOrder(orderId);
+        orderService.submitOrder(orderId);
+
+        assertTrue(order.isSubmitted());
+        verify(outboxEventRepository, never()).save(any(OutboxEvent.class));
+    }
+
+    @Test
+    void addingItemToSubmittedOrderThrowsAndWritesNoOutboxEvent() {
+        UUID orderId = UUID.randomUUID();
+        Order order = new Order(UUID.randomUUID(), "USD");
+        order.addItem(UUID.randomUUID(), 1, new BigDecimal("10.00"));
+        order.submit();
+
+        when(orderRepository.findWithItemsById(orderId))
+                .thenReturn(Optional.of(order));
+
+        assertThrows(
+                com.ahmetkeles.orderservice.domain.OrderNotModifiableException.class,
+                () -> orderService.addItem(
+                        orderId,
+                        UUID.randomUUID(),
+                        1,
+                        new BigDecimal("10.00")
+                )
+        );
+
+        assertEquals(1, order.getItems().size());
+        verify(outboxEventRepository, never()).save(any(OutboxEvent.class));
+    }
+
+    @Test
+    void submittingUnknownOrderThrows() {
+        UUID orderId = UUID.randomUUID();
+
+        when(orderRepository.findWithItemsById(orderId))
+                .thenReturn(Optional.empty());
+
+        assertThrows(
+                OrderNotFoundException.class,
+                () -> orderService.submitOrder(orderId)
+        );
     }
 
     @Test

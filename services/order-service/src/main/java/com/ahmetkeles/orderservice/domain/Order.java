@@ -45,6 +45,15 @@ public class Order {
     @Version
     private Long version;
 
+    /**
+     * Whether the client has finished assembling this order. Items can only
+     * be added while the order is PENDING and unsubmitted, and the order can
+     * only confirm once it is submitted AND every item is reserved — so a
+     * fast reservation can never confirm an order that is still being
+     * assembled.
+     */
+    private boolean submitted;
+
     @OneToMany(mappedBy = "order", cascade = CascadeType.ALL, orphanRemoval = true)
     private List<OrderItem> items = new ArrayList<>();
 
@@ -65,19 +74,25 @@ public class Order {
         this.status = OrderStatus.PENDING;
         this.totalAmount = BigDecimal.ZERO;
         this.currency = currency;
+        this.submitted = false;
         this.createdAt = Instant.now();
         this.updatedAt = Instant.now();
     }
 
     /**
      * Adds an item to the order. Items can only be added while the order is
-     * still {@code PENDING}: a terminal order rejects the call before any
-     * state is touched, so items, total, {@code updatedAt} and the version
-     * all stay exactly as they were.
+     * still {@code PENDING} and the client has not yet submitted it: a
+     * terminal or submitted order rejects the call before any state is
+     * touched, so items, total, {@code updatedAt} and the version all stay
+     * exactly as they were.
      */
     public OrderItem addItem(UUID productId, int quantity, BigDecimal unitPrice) {
         if (status != OrderStatus.PENDING) {
             throw new OrderNotModifiableException(id, status);
+        }
+
+        if (submitted) {
+            throw new OrderNotModifiableException(id);
         }
 
         OrderItem item = new OrderItem(productId, quantity, unitPrice, this);
@@ -117,9 +132,52 @@ public class Order {
         match.markReserved();
         updatedAt = Instant.now();
 
+        if (submitted && allItemsReserved()) {
+            status = OrderStatus.CONFIRMED;
+        }
+    }
+
+    /**
+     * Marks the order as submitted: the client has finished assembling it.
+     * Reports whether this call performed the transition, mirroring
+     * {@link #cancel()}, so exactly one caller ever sees {@code true}.
+     *
+     * <p>Rules:
+     * <ul>
+     * <li>a CANCELLED order cannot be submitted (throws
+     *     {@link OrderNotModifiableException});</li>
+     * <li>an already-submitted order (CONFIRMED orders are always
+     *     submitted) is a true no-op — no state touched, {@code false}
+     *     returned — so duplicate submits are idempotent;</li>
+     * <li>an order without items cannot be submitted (throws
+     *     {@link EmptyOrderSubmissionException}) and stays unsubmitted;</li>
+     * <li>when every item is already reserved at submission time, the
+     *     submit itself performs PENDING -&gt; CONFIRMED, so reservations
+     *     that finished before the client submitted confirm immediately in
+     *     the submitting transaction.</li>
+     * </ul>
+     */
+    public boolean submit() {
+        if (status == OrderStatus.CANCELLED) {
+            throw new OrderNotModifiableException(id, status);
+        }
+
+        if (submitted) {
+            return false;
+        }
+
+        if (items.isEmpty()) {
+            throw new EmptyOrderSubmissionException(id);
+        }
+
+        submitted = true;
+        updatedAt = Instant.now();
+
         if (allItemsReserved()) {
             status = OrderStatus.CONFIRMED;
         }
+
+        return true;
     }
 
     private boolean allItemsReserved() {
@@ -174,6 +232,10 @@ public class Order {
 
     public Long getVersion() {
         return version;
+    }
+
+    public boolean isSubmitted() {
+        return submitted;
     }
 
     public List<OrderItem> getItems() {

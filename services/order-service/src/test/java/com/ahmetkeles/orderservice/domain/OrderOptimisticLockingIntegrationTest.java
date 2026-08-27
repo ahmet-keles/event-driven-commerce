@@ -308,6 +308,8 @@ class OrderOptimisticLockingIntegrationTest extends PostgreSQLIntegrationTest {
             );
         }
 
+        orderService.submitOrder(order.getId());
+
         return order.getId();
     }
 

@@ -63,6 +63,22 @@ public class OrderService {
         return findOrderWithItems(orderId);
     }
 
+    /**
+     * Marks the order as submitted (assembly finished). If every item is
+     * already reserved when the client submits, the same transaction
+     * performs PENDING -> CONFIRMED; otherwise the last reservation to
+     * arrive confirms later. Duplicate submits are no-ops. The submission
+     * participates in the aggregate's optimistic locking: a version race
+     * with a concurrent addItem or reservation surfaces as an
+     * OptimisticLockingFailureException.
+     */
+    @Transactional
+    public Order submitOrder(UUID orderId) {
+        Order order = findOrderWithItems(orderId);
+        order.submit();
+        return order;
+    }
+
     @Transactional
     public void markItemReserved(UUID orderId, UUID orderItemId) {
         Order order = findOrderWithItems(orderId);

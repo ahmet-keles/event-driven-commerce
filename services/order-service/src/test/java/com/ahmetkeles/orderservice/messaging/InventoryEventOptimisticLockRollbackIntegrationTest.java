@@ -84,6 +84,7 @@ class InventoryEventOptimisticLockRollbackIntegrationTest
                 new BigDecimal("10.00"));
         orderService.addItem(orderId, UUID.randomUUID(), 2,
                 new BigDecimal("5.00"));
+        orderService.submitOrder(orderId);
 
         List<OrderItem> items = orderService.getOrder(orderId).getItems();
         List<InventoryEventEnvelope> envelopes = List.of(

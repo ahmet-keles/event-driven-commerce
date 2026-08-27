@@ -35,6 +35,11 @@ public class OrderController {
         return OrderResponse.from(orderService.getOrder(orderId));
     }
 
+    @PostMapping("/{orderId}/submit")
+    public OrderResponse submitOrder(@PathVariable UUID orderId) {
+        return OrderResponse.from(orderService.submitOrder(orderId));
+    }
+
     @PostMapping("/{orderId}/items")
     public OrderResponse addItem(
             @PathVariable UUID orderId,

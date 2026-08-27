@@ -253,6 +253,8 @@ class InventoryEventIdempotencyIntegrationTest
             );
         }
 
+        orderService.submitOrder(order.getId());
+
         return order.getId();
     }
 
