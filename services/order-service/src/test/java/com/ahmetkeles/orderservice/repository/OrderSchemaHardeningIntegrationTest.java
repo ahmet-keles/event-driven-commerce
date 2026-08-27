@@ -54,11 +54,23 @@ class OrderSchemaHardeningIntegrationTest extends PostgreSQLIntegrationTest {
 
     @Test
     void wellFormedOrderRowIsAccepted() {
-        insertOrder(Map.of());
+        UUID orderId = UUID.randomUUID();
+        insertOrder(Map.of("id", orderId));
 
         Integer count = jdbcTemplate.queryForObject(
                 "SELECT COUNT(*) FROM orders", Integer.class);
         assertEquals(1, count);
+
+        // A raw insert that names only the V1/V5 columns must still satisfy
+        // the V6/V7 additions through their defaults.
+        Boolean submitted = jdbcTemplate.queryForObject(
+                "SELECT submitted FROM orders WHERE id = ?",
+                Boolean.class, orderId);
+        String paymentStatus = jdbcTemplate.queryForObject(
+                "SELECT payment_status FROM orders WHERE id = ?",
+                String.class, orderId);
+        assertEquals(Boolean.FALSE, submitted);
+        assertEquals("NOT_STARTED", paymentStatus);
     }
 
     @Test

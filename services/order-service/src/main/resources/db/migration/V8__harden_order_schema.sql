@@ -9,8 +9,9 @@
 -- ADD CONSTRAINT ... NOT VALID + VALIDATE CONSTRAINT across separate
 -- releases so the exclusive lock stays brief.
 --
--- V6 is reserved by concurrent work and intentionally absent here; this
--- migration must merge after it.
+-- Lands as V8, after the V6 submission state and V7 payment state: those
+-- columns ship NOT NULL with their own defaults and checks, so this
+-- migration hardens only the original V1/V5 surface.
 
 -- === orders: business-required columns become NOT NULL ======================
 -- The Java constructor already rejects all of these; the schema now agrees.
