@@ -1,6 +1,10 @@
 package com.ahmetkeles.orderservice.retention;
 
+import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Positive;
+import org.hibernate.validator.constraints.time.DurationMin;
 import org.springframework.boot.context.properties.ConfigurationProperties;
+import org.springframework.validation.annotation.Validated;
 
 import java.time.Duration;
 
@@ -9,7 +13,14 @@ import java.time.Duration;
  * events and processed-event ledger entries. Unpublished outbox rows are
  * never eligible, whatever their age — they are undelivered work, not
  * history.
+ *
+ * <p>All bounds are validated at startup and the application refuses to boot
+ * on a non-positive value. A negative max age would be silently catastrophic
+ * rather than merely wrong: {@code now().minus(-d)} places the cutoff in the
+ * future, making every published outbox row and every ledger row eligible in
+ * one sweep.
  */
+@Validated
 @ConfigurationProperties(prefix = "app.retention")
 public class RetentionProperties {
 
@@ -17,17 +28,27 @@ public class RetentionProperties {
      * Minimum age of a published outbox row before it may be deleted,
      * measured from {@code published_at}.
      */
+    @NotNull
+    @DurationMin(millis = 1)
     private Duration outboxMaxAge = Duration.ofDays(7);
 
     /**
      * Minimum age of a processed-event row before it may be deleted, measured
-     * from {@code processed_at}. Must comfortably exceed the longest plausible
-     * redelivery window (consumer retries, DLT replays, offset rewinds):
-     * deleting a ledger row early re-opens the door to a duplicate mutation.
+     * from {@code processed_at}.
+     *
+     * <p>This ledger is not archival history: a deleted row re-enables its
+     * eventId, so an old event redelivered after deletion would be applied
+     * again. The retention age must therefore ALWAYS exceed the Kafka source
+     * topic's retention plus the maximum operational replay window — consumer
+     * retries, DLT redrives, offset rewinds. Anyone raising those horizons
+     * must raise this in step.
      */
-    private Duration processedEventsMaxAge = Duration.ofDays(7);
+    @NotNull
+    @DurationMin(millis = 1)
+    private Duration processedEventsMaxAge = Duration.ofDays(30);
 
     /** Rows deleted per transaction. */
+    @Positive
     private int batchSize = 500;
 
     /**
@@ -36,6 +57,7 @@ public class RetentionProperties {
      * backlog beyond {@code batchSize * maxBatchesPerRun} simply drains over
      * the following runs.
      */
+    @Positive
     private int maxBatchesPerRun = 10;
 
     public Duration getOutboxMaxAge() {

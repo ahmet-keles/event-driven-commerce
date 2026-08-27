@@ -30,9 +30,11 @@ ALTER TABLE orders
     ADD CONSTRAINT orders_total_amount_nonnegative
         CHECK (total_amount >= 0),
     -- Order totals are sums of non-negative item subtotals.
-    ADD CONSTRAINT orders_currency_iso4217
+    ADD CONSTRAINT orders_currency_code_format
         CHECK (currency ~ '^[A-Z]{3}$'),
-    -- Three uppercase letters, the ISO-4217 alphabetic form ("USD").
+    -- Format only: three uppercase letters, the shape of an ISO-4217
+    -- alphabetic code ("USD"). This does not verify membership in the
+    -- actual ISO-4217 code list; that is application-level validation.
     ADD CONSTRAINT orders_version_nonnegative
         CHECK (version >= 0);
     -- Hibernate's @Version only ever increments from 0; a negative value
