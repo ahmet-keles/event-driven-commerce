@@ -85,10 +85,12 @@ class WireContractTest {
         assertEquals("PENDING", createdPayload.get("status").asText());
 
         // Quantity and price mirror the fixture's values so non-identity
-        // fields compare exactly.
+        // fields compare exactly. Submission finalizes assembly so the
+        // reservation can confirm the order and open the payment leg.
         JsonNode withItem = api.addItem(orderId, productId, 3, "12.5");
         UUID orderItemId = UUID.fromString(
                 withItem.get("items").get(0).get("id").asText());
+        api.submit(orderId);
 
         JsonNode itemAdded = topics.awaitEnvelope(
                 E2eStack.ORDER_TOPIC,
@@ -119,6 +121,24 @@ class WireContractTest {
                 reservedPayload.get("orderItemId").asText(),
                 "orderItemId must round-trip through inventory unchanged");
         assertEquals(3, reservedPayload.get("quantity").asInt());
+
+        // Confirmation opens the payment leg: the ORDER_CONFIRMED the order
+        // service publishes must match the documented shape a payment
+        // service will consume.
+        JsonNode confirmed = topics.awaitEnvelope(
+                E2eStack.ORDER_TOPIC,
+                "ORDER_CONFIRMED for " + orderId,
+                Topics.envelopeFor(orderId, "ORDER_CONFIRMED"),
+                WAIT);
+
+        assertSameShape(Fixtures.load(Fixtures.ORDER_CONFIRMED), confirmed);
+        ObjectNode confirmedPayload = Fixtures.payloadOf(confirmed);
+        assertEquals(orderId.toString(),
+                confirmedPayload.get("orderId").asText());
+        assertEquals(customerId.toString(),
+                confirmedPayload.get("customerId").asText());
+        assertDecimalEquals("37.5", confirmedPayload.get("totalAmount"));
+        assertEquals("USD", confirmedPayload.get("currency").asText());
     }
 
     private void capturedReservationFailedMatchesFixture() {

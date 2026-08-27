@@ -1,0 +1,8 @@
+{
+  "eventId": "5e6f7081-92a3-b4c5-d6e7-f8091a2b3c4d",
+  "aggregateType": "Order",
+  "aggregateId": "9b1c2d3e-4f50-6172-8394-a5b6c7d8e9f0",
+  "eventType": "ORDER_CONFIRMED",
+  "payload": "{\"orderId\":\"9b1c2d3e-4f50-6172-8394-a5b6c7d8e9f0\",\"customerId\":\"22222222-3333-4444-5555-666666666666\",\"totalAmount\":37.5,\"currency\":\"USD\"}",
+  "occurredAt": "2026-01-01T12:00:04Z"
+}

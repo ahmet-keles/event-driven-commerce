@@ -1,0 +1,8 @@
+{
+  "eventId": "6f708192-a3b4-c5d6-e7f8-091a2b3c4d5e",
+  "aggregateType": "Order",
+  "aggregateId": "9b1c2d3e-4f50-6172-8394-a5b6c7d8e9f0",
+  "eventType": "PAYMENT_COMPLETED",
+  "payload": "{\"orderId\":\"9b1c2d3e-4f50-6172-8394-a5b6c7d8e9f0\",\"paymentId\":\"33333333-4444-5555-6666-777777777777\",\"amount\":37.5,\"currency\":\"USD\"}",
+  "occurredAt": "2026-01-01T12:00:05Z"
+}

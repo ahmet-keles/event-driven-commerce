@@ -1,6 +1,7 @@
 package com.ahmetkeles.orderservice.domain;
 
 import jakarta.persistence.CascadeType;
+import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
 import jakarta.persistence.Enumerated;
@@ -26,6 +27,10 @@ public class Order {
 
     @Enumerated(EnumType.STRING)
     private OrderStatus status;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "payment_status", nullable = false, length = 20)
+    private PaymentStatus paymentStatus;
 
     private BigDecimal totalAmount;
 
@@ -72,6 +77,7 @@ public class Order {
         this.id = UUID.randomUUID();
         this.customerId = customerId;
         this.status = OrderStatus.PENDING;
+        this.paymentStatus = PaymentStatus.NOT_STARTED;
         this.totalAmount = BigDecimal.ZERO;
         this.currency = currency;
         this.submitted = false;
@@ -105,19 +111,29 @@ public class Order {
     }
 
     /**
-     * Records that one item of this order has been reserved, confirming the
-     * order only once every item is reserved. Reservation state is tracked per
-     * item rather than as a count, so a redelivered event for an item that is
-     * already reserved cannot advance the order towards confirmation.
+     * Records that one item of this order has been reserved. Reservation
+     * state is tracked per item rather than as a count, so a redelivered
+     * event for an item that is already reserved cannot advance the order
+     * towards confirmation.
      *
      * <p>The aggregate is only mutated when a previously-unreserved matching
      * item is newly marked: a terminal order, an unknown or null item id, and
      * an already-reserved item all leave the order untouched, including
      * {@code updatedAt}.
+     *
+     * <p>Returns {@code true} only when this call performed the
+     * {@code PENDING -> CONFIRMED} transition, which requires the client to
+     * have explicitly submitted the order first AND every item to be
+     * reserved — the explicit signal the service layer uses to emit
+     * {@code ORDER_CONFIRMED} exactly once. A reservation on an order still
+     * being assembled records the item and returns {@code false}; the
+     * confirming call is then the submit. Confirmation also starts the
+     * payment leg by moving {@code paymentStatus} to {@code PENDING} in the
+     * same mutation.
      */
-    public void markItemReserved(UUID orderItemId) {
+    public boolean markItemReserved(UUID orderItemId) {
         if (status != OrderStatus.PENDING) {
-            return;
+            return false;
         }
 
         OrderItem match = items.stream()
@@ -126,15 +142,13 @@ public class Order {
                 .orElse(null);
 
         if (match == null || match.isReserved()) {
-            return;
+            return false;
         }
 
         match.markReserved();
         updatedAt = Instant.now();
 
-        if (submitted && allItemsReserved()) {
-            status = OrderStatus.CONFIRMED;
-        }
+        return confirmIfSubmittedAndFullyReserved();
     }
 
     /**
@@ -152,9 +166,13 @@ public class Order {
      * <li>an order without items cannot be submitted (throws
      *     {@link EmptyOrderSubmissionException}) and stays unsubmitted;</li>
      * <li>when every item is already reserved at submission time, the
-     *     submit itself performs PENDING -&gt; CONFIRMED, so reservations
-     *     that finished before the client submitted confirm immediately in
-     *     the submitting transaction.</li>
+     *     submit itself performs PENDING -&gt; CONFIRMED (and opens the
+     *     payment leg), so reservations that finished before the client
+     *     submitted confirm immediately in the submitting transaction. The
+     *     service layer detects that case as {@code submit() == true} plus a
+     *     CONFIRMED status: a {@code true} submit implies the order was not
+     *     previously confirmed, so a CONFIRMED status afterwards can only
+     *     have been produced by this call.</li>
      * </ul>
      */
     public boolean submit() {
@@ -173,11 +191,25 @@ public class Order {
         submitted = true;
         updatedAt = Instant.now();
 
-        if (allItemsReserved()) {
-            status = OrderStatus.CONFIRMED;
-        }
+        confirmIfSubmittedAndFullyReserved();
 
         return true;
+    }
+
+    /**
+     * The single confirmation site: both a final reservation and a submit
+     * over fully-reserved items funnel through here, so the
+     * PENDING -> CONFIRMED transition and the payment kickoff can never
+     * happen separately or twice.
+     */
+    private boolean confirmIfSubmittedAndFullyReserved() {
+        if (submitted && allItemsReserved()) {
+            status = OrderStatus.CONFIRMED;
+            paymentStatus = PaymentStatus.PENDING;
+            return true;
+        }
+
+        return false;
     }
 
     private boolean allItemsReserved() {
@@ -200,6 +232,58 @@ public class Order {
         status = OrderStatus.CANCELLED;
         updatedAt = Instant.now();
         return true;
+    }
+
+    /**
+     * Records a successful payment, reporting whether this call performed the
+     * {@code PENDING -> COMPLETED} transition. The first terminal payment
+     * outcome wins: a payment that already completed or failed is left
+     * untouched, including {@code updatedAt}.
+     */
+    public boolean completePayment() {
+        if (paymentStatus != PaymentStatus.PENDING) {
+            return false;
+        }
+
+        paymentStatus = PaymentStatus.COMPLETED;
+        updatedAt = Instant.now();
+        return true;
+    }
+
+    /**
+     * Records a failed payment, reporting whether this call performed the
+     * {@code PENDING -> FAILED} transition. A payment that already reached a
+     * terminal outcome — completed or failed — is left untouched.
+     */
+    public boolean failPayment() {
+        if (paymentStatus != PaymentStatus.PENDING) {
+            return false;
+        }
+
+        paymentStatus = PaymentStatus.FAILED;
+        updatedAt = Instant.now();
+        return true;
+    }
+
+    /**
+     * Payment-failure compensation transition: unlike {@link #cancel()},
+     * which only cancels an order that never confirmed, this cancels a
+     * CONFIRMED order whose payment failed. Reports whether this call
+     * performed the transition; a PENDING or already-CANCELLED order is left
+     * untouched, keeping generic cancellation semantics unchanged.
+     */
+    public boolean cancelForFailedPayment() {
+        if (status != OrderStatus.CONFIRMED) {
+            return false;
+        }
+
+        status = OrderStatus.CANCELLED;
+        updatedAt = Instant.now();
+        return true;
+    }
+
+    public PaymentStatus getPaymentStatus() {
+        return paymentStatus;
     }
 
     public BigDecimal getTotalAmount() {

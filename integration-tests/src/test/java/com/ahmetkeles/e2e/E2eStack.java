@@ -48,6 +48,7 @@ final class E2eStack {
 
     static final String ORDER_TOPIC = "order.events";
     static final String INVENTORY_TOPIC = "inventory.events";
+    static final String PAYMENT_TOPIC = "payment.events";
 
     private static final Logger log = LoggerFactory.getLogger(E2eStack.class);
 
@@ -215,7 +216,8 @@ final class E2eStack {
             try {
                 admin.createTopics(List.of(
                         new NewTopic(ORDER_TOPIC, TOPIC_PARTITIONS, (short) 1),
-                        new NewTopic(INVENTORY_TOPIC, TOPIC_PARTITIONS, (short) 1)
+                        new NewTopic(INVENTORY_TOPIC, TOPIC_PARTITIONS, (short) 1),
+                        new NewTopic(PAYMENT_TOPIC, TOPIC_PARTITIONS, (short) 1)
                 )).all().get();
             } catch (ExecutionException exception) {
                 if (!(exception.getCause() instanceof TopicExistsException)) {

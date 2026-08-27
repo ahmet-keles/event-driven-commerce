@@ -133,8 +133,18 @@ class OrderCancellationOptimisticLockRollbackIntegrationTest
                 orderRepository.findWithItemsById(orderId)
                         .orElseThrow().getStatus(),
                 "the committed reservation must win");
-        assertEquals(0, outboxEventRepository.count(),
+        assertEquals(0, outboxRowsOfType("ORDER_CANCELLED"),
                 "the losing cancellation's ORDER_CANCELLED outbox row must "
                         + "roll back with its stale update");
+        assertEquals(1, outboxRowsOfType("ORDER_CONFIRMED"),
+                "the winning confirmation's ORDER_CONFIRMED row must survive");
+        assertEquals(1, outboxEventRepository.count(),
+                "nothing else may remain in the outbox");
+    }
+
+    private long outboxRowsOfType(String eventType) {
+        return outboxEventRepository.findAll().stream()
+                .filter(event -> eventType.equals(event.getEventType()))
+                .count();
     }
 }

@@ -209,6 +209,19 @@ final class Db {
                 });
     }
 
+    Optional<String> orderPaymentStatus(UUID orderId) {
+        return execute(
+                "SELECT payment_status FROM orders WHERE id = ?",
+                statement -> {
+                    statement.setObject(1, orderId);
+                    try (ResultSet result = statement.executeQuery()) {
+                        return result.next()
+                                ? Optional.of(result.getString(1))
+                                : Optional.empty();
+                    }
+                });
+    }
+
     private interface Query<T> {
         T run(PreparedStatement statement) throws SQLException;
     }

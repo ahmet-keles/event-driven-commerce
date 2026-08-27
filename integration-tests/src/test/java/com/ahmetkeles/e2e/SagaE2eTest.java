@@ -74,8 +74,9 @@ class SagaE2eTest {
         // Both services' outbox rows for this order end up marked published.
         await().atMost(WAIT).untilAsserted(() -> {
             var orderRows = orderDb.outboxRows(orderId);
-            assertEquals(2, orderRows.size(),
-                    "expected ORDER_CREATED + ORDER_ITEM_ADDED for " + orderId);
+            assertEquals(3, orderRows.size(),
+                    "expected ORDER_CREATED + ORDER_ITEM_ADDED "
+                            + "+ ORDER_CONFIRMED for " + orderId);
             orderRows.forEach(outboxRow -> assertNotNull(
                     outboxRow.publishedAt(),
                     outboxRow.eventType() + " should be marked published"));
