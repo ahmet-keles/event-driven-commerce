@@ -3,6 +3,8 @@ package com.ahmetkeles.orderservice.outbox;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
+import org.springframework.transaction.annotation.Propagation;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.util.Collection;
 import java.util.List;
@@ -21,7 +23,9 @@ public interface OutboxEventRepository extends JpaRepository<OutboxEvent, UUID> 
      * claim the same row and neither one blocks the other.
      *
      * <p>The row locks live for exactly as long as the calling transaction, so
-     * callers must run inside a transaction and should keep it short. A replica
+     * the transaction is mandatory — a call without one would silently release
+     * each lock at statement end and defeat the guarantee, so it fails fast
+     * instead. Keep the transaction short. A replica
      * that crashes mid-batch releases its locks when its connection dies; the
      * rows it never published simply reappear on the next poll.
      *
@@ -31,6 +35,7 @@ public interface OutboxEventRepository extends JpaRepository<OutboxEvent, UUID> 
      * timestamp. See {@link OutboxPublisher} for the ordering guarantees this
      * does and does not provide.
      */
+    @Transactional(propagation = Propagation.MANDATORY)
     @Query(
             value = """
                     SELECT *
@@ -61,6 +66,7 @@ public interface OutboxEventRepository extends JpaRepository<OutboxEvent, UUID> 
      * still publishing still counts as pending. Both outcomes make this guard
      * conservative: it can only defer needlessly, never publish early.
      */
+    @Transactional(propagation = Propagation.MANDATORY)
     @Query(
             value = """
                     SELECT DISTINCT ON (aggregate_id) id

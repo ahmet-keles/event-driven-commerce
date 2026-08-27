@@ -77,9 +77,10 @@ class OutboxPublisherConcurrencyIntegrationTest {
         registry.add("spring.kafka.admin.auto-create", () -> "false");
         registry.add("spring.kafka.listener.auto-startup", () -> "false");
 
-        // Each test drives publishPendingEvents() itself. Push the scheduled
-        // poll far out so it cannot claim rows underneath an assertion.
-        registry.add("app.outbox.publish-interval-ms", () -> "3600000");
+        // Each test drives publishPendingEvents() itself. Scheduling is
+        // disabled outright because a fixedDelay task also runs once at
+        // context startup, which would race these assertions.
+        registry.add("app.scheduling.enabled", () -> "false");
 
         // Keeps the timeout test quick.
         registry.add("app.outbox.send-timeout-ms", () -> "250");
