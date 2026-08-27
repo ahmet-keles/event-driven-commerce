@@ -65,6 +65,31 @@ final class Fixtures {
         }
     }
 
+    /**
+     * Builds a producible envelope from a fixture: identity fields
+     * (eventId, aggregateId/orderId, occurredAt) are retargeted to the
+     * caller's UUIDs, everything else keeps the fixture's documented shape
+     * and values; {@code payloadEdits} adjusts the remaining payload ids.
+     */
+    static ObjectNode envelope(
+            String fixtureName,
+            java.util.UUID eventId,
+            java.util.UUID orderId,
+            java.util.function.Consumer<ObjectNode> payloadEdits
+    ) {
+        ObjectNode envelope = load(fixtureName);
+        envelope.put("eventId", eventId.toString());
+        envelope.put("aggregateId", orderId.toString());
+        envelope.put("occurredAt", java.time.Instant.now().toString());
+
+        ObjectNode payload = payloadOf(envelope);
+        payload.put("orderId", orderId.toString());
+        payloadEdits.accept(payload);
+        setPayload(envelope, payload);
+
+        return envelope;
+    }
+
     static String write(JsonNode node) {
         try {
             return MAPPER.writeValueAsString(node);

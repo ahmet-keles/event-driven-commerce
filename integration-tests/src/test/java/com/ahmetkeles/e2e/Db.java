@@ -73,6 +73,46 @@ final class Db {
                 });
     }
 
+    long processedEventCount(UUID eventId) {
+        return execute(
+                "SELECT COUNT(*) FROM processed_events WHERE event_id = ?",
+                statement -> {
+                    statement.setObject(1, eventId);
+                    try (ResultSet result = statement.executeQuery()) {
+                        result.next();
+                        return result.getLong(1);
+                    }
+                });
+    }
+
+    Optional<Instant> orderUpdatedAt(UUID orderId) {
+        return execute(
+                "SELECT updated_at FROM orders WHERE id = ?",
+                statement -> {
+                    statement.setObject(1, orderId);
+                    try (ResultSet result = statement.executeQuery()) {
+                        return result.next()
+                                ? Optional.of(result.getTimestamp(1).toInstant())
+                                : Optional.empty();
+                    }
+                });
+    }
+
+    /**
+     * Reopens the accepted at-least-once window on purpose: a NULL
+     * published_at makes the row pending again, so the publisher re-sends the
+     * same eventId and the consumer's ledger must absorb the duplicate.
+     */
+    void markOutboxUnpublished(UUID outboxEventId) {
+        execute(
+                "UPDATE outbox_events SET published_at = NULL WHERE id = ?",
+                statement -> {
+                    statement.setObject(1, outboxEventId);
+                    statement.executeUpdate();
+                    return null;
+                });
+    }
+
     Optional<String> orderStatus(UUID orderId) {
         return execute(
                 "SELECT status FROM orders WHERE id = ?",
