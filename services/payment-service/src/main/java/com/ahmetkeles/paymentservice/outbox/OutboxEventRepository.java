@@ -1,11 +1,13 @@
 package com.ahmetkeles.paymentservice.outbox;
 
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Instant;
 import java.util.Collection;
 import java.util.List;
 import java.util.UUID;
@@ -81,5 +83,37 @@ public interface OutboxEventRepository
     )
     List<UUID> findOldestPendingEventIds(
             @Param("aggregateIds") Collection<UUID> aggregateIds
+    );
+
+    /**
+     * Retention: deletes one bounded batch of rows that were published before
+     * the cutoff. The inner select filters on {@code published_at IS NOT NULL},
+     * so unpublished rows — undelivered work — are structurally out of reach,
+     * whatever their age, and the lock set is disjoint from the publisher's
+     * claim transaction, which only locks unpublished rows. Requires the
+     * caller's transaction so the lock-and-delete pair stays atomic and short;
+     * {@code FOR UPDATE SKIP LOCKED} keeps concurrent replicas on disjoint
+     * victims.
+     */
+    @Transactional(propagation = Propagation.MANDATORY)
+    @Modifying
+    @Query(
+            value = """
+                    DELETE FROM outbox_events
+                    WHERE id IN (
+                        SELECT id
+                        FROM outbox_events
+                        WHERE published_at IS NOT NULL
+                          AND published_at < :cutoff
+                        ORDER BY published_at ASC, id ASC
+                        LIMIT :batchSize
+                        FOR UPDATE SKIP LOCKED
+                    )
+                    """,
+            nativeQuery = true
+    )
+    int deletePublishedBatch(
+            @Param("cutoff") Instant cutoff,
+            @Param("batchSize") int batchSize
     );
 }

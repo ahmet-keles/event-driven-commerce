@@ -25,5 +25,8 @@ public abstract class PostgreSQLIntegrationTest {
         // They must not require a running Kafka broker.
         registry.add("spring.kafka.listener.auto-startup", () -> "false");
         registry.add("app.outbox.publisher-enabled", () -> "false");
+        // Retention tests drive the job synchronously with their own policy;
+        // the scheduled instance must not race them (or any other test).
+        registry.add("app.retention.enabled", () -> "false");
     }
 }
