@@ -209,6 +209,40 @@ final class Db {
                 });
     }
 
+    record PaymentRow(String status, java.math.BigDecimal amount,
+                      String failureReason) {
+    }
+
+    /** The payment service's single terminal payment row for an order. */
+    Optional<PaymentRow> paymentForOrder(UUID orderId) {
+        return execute(
+                "SELECT status, amount, failure_reason FROM payments"
+                        + " WHERE order_id = ?",
+                statement -> {
+                    statement.setObject(1, orderId);
+                    try (ResultSet result = statement.executeQuery()) {
+                        return result.next()
+                                ? Optional.of(new PaymentRow(
+                                        result.getString(1),
+                                        result.getBigDecimal(2),
+                                        result.getString(3)))
+                                : Optional.empty();
+                    }
+                });
+    }
+
+    long paymentCountForOrder(UUID orderId) {
+        return execute(
+                "SELECT COUNT(*) FROM payments WHERE order_id = ?",
+                statement -> {
+                    statement.setObject(1, orderId);
+                    try (ResultSet result = statement.executeQuery()) {
+                        result.next();
+                        return result.getLong(1);
+                    }
+                });
+    }
+
     Optional<String> orderPaymentStatus(UUID orderId) {
         return execute(
                 "SELECT payment_status FROM orders WHERE id = ?",

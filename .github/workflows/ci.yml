@@ -49,9 +49,9 @@ jobs:
         run: ./mvnw -B --no-transfer-progress test
 
   e2e:
-    # Cross-service end-to-end suite (integration-tests/): builds both boot
-    # jars, then runs the saga against real Kafka + two PostgreSQL instances
-    # and both apps as containers. Independent of the matrix job on purpose:
+    # Cross-service end-to-end suite (integration-tests/): builds all three
+    # boot jars, then runs the saga against real Kafka + three PostgreSQL
+    # instances and all three apps as containers. Independent of the matrix job on purpose:
     # a red here means the seam is broken, a red there means a service is.
     name: e2e
     runs-on: ubuntu-latest
@@ -73,6 +73,7 @@ jobs:
           cache-dependency-path: |
             services/order-service/pom.xml
             services/inventory-service/pom.xml
+            services/payment-service/pom.xml
             integration-tests/pom.xml
 
       - name: Verify Docker and pre-pull test images
@@ -84,6 +85,10 @@ jobs:
 
       - name: Build inventory-service jar
         working-directory: services/inventory-service
+        run: ./mvnw -B --no-transfer-progress -DskipTests package
+
+      - name: Build payment-service jar
+        working-directory: services/payment-service
         run: ./mvnw -B --no-transfer-progress -DskipTests package
 
       - name: Run end-to-end tests

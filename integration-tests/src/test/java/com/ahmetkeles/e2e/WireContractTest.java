@@ -32,7 +32,10 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
  * the happy-path saga already proves the real reserved event is accepted (the
  * order could not reach CONFIRMED otherwise), and nothing consumes
  * ORDER_CREATED today; injecting a reserved event alongside the live flow
- * would race it.
+ * would race it. The payment outcomes ({@code PAYMENT_COMPLETED},
+ * {@code PAYMENT_FAILED}) are likewise capture-only: the real gateway round
+ * trip already proves the order-side consumer accepts them, and injected
+ * outcomes would race the real verdict for the same order.
  */
 @Timeout(120)
 class WireContractTest {
@@ -57,6 +60,7 @@ class WireContractTest {
     @Test
     void wireContractMatchesGoldenFixtures() {
         capturedOrderCreatedAndItemAddedMatchFixtures();
+        capturedPaymentFailedMatchesFixture();
         capturedReservationFailedMatchesFixture();
         injectedOrderItemAddedFixtureIsAcceptedByInventory();
         injectedReservationFailedFixtureIsAcceptedByOrder();
@@ -139,6 +143,52 @@ class WireContractTest {
                 confirmedPayload.get("customerId").asText());
         assertDecimalEquals("37.5", confirmedPayload.get("totalAmount"));
         assertEquals("USD", confirmedPayload.get("currency").asText());
+
+        // The real payment service approves 37.5 (below the decline
+        // threshold) and must announce it in the documented shape.
+        JsonNode completed = topics.awaitEnvelope(
+                E2eStack.PAYMENT_TOPIC,
+                "PAYMENT_COMPLETED for " + orderId,
+                Topics.envelopeFor(orderId, "PAYMENT_COMPLETED"),
+                WAIT);
+
+        assertSameShape(Fixtures.load(Fixtures.PAYMENT_COMPLETED), completed);
+        ObjectNode completedPayload = Fixtures.payloadOf(completed);
+        assertEquals(orderId.toString(),
+                completedPayload.get("orderId").asText());
+        assertDoesNotThrow(() -> UUID.fromString(
+                completedPayload.get("paymentId").asText()),
+                "paymentId must be a UUID");
+        assertEquals("USD", completedPayload.get("currency").asText());
+        assertDecimalEquals("37.5", completedPayload.get("amount"));
+    }
+
+    private void capturedPaymentFailedMatchesFixture() {
+        UUID productId = UUID.randomUUID();
+        inventoryDb.seedInventory(productId, 10);
+
+        UUID orderId = UUID.fromString(
+                api.createOrder(UUID.randomUUID()).get("id").asText());
+        // 4 x 250.00 = 1000.00, at the gateway's decline threshold.
+        api.addItem(orderId, productId, 4, "250.00");
+        api.submit(orderId);
+
+        JsonNode failed = topics.awaitEnvelope(
+                E2eStack.PAYMENT_TOPIC,
+                "PAYMENT_FAILED for " + orderId,
+                Topics.envelopeFor(orderId, "PAYMENT_FAILED"),
+                WAIT);
+
+        ObjectNode fixture = Fixtures.load(Fixtures.PAYMENT_FAILED);
+        assertSameShape(fixture, failed);
+        ObjectNode failedPayload = Fixtures.payloadOf(failed);
+        assertEquals(orderId.toString(),
+                failedPayload.get("orderId").asText());
+        assertDecimalEquals("1000.00", failedPayload.get("amount"));
+        assertEquals(
+                Fixtures.payloadOf(fixture).get("reason").asText(),
+                failedPayload.get("reason").asText(),
+                "the decline reason is part of the documented contract");
     }
 
     private void capturedReservationFailedMatchesFixture() {

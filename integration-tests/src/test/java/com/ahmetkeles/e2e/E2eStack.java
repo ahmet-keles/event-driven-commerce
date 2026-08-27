@@ -28,7 +28,7 @@ import java.util.concurrent.ExecutionException;
 import java.util.stream.Stream;
 
 /**
- * The shared five-container stack: Kafka, one Postgres per service, and both
+ * The shared seven-container stack: Kafka, one Postgres per service, and all
  * services running as black-box containers built from their boot jars. Started
  * once per JVM on first use and shared by every test class; tests isolate by
  * unique UUIDs, never by cleanup, so sharing is safe.
@@ -40,7 +40,7 @@ import java.util.stream.Stream;
  *       order-service (production default is {@code latest}): a fresh consumer
  *       group must not skip events produced before its first partition
  *       assignment.</li>
- *   <li>{@code APP_OUTBOX_PUBLISH_INTERVAL_MS=100} for both services, so each
+ *   <li>{@code APP_OUTBOX_PUBLISH_INTERVAL_MS=100} for every service, so each
  *       saga hop completes in well under a second.</li>
  * </ul>
  */
@@ -62,14 +62,17 @@ final class E2eStack {
 
     private static final String ORDER_GROUP = "order-service";
     private static final String INVENTORY_GROUP = "inventory-service";
+    private static final String PAYMENT_GROUP = "payment-service";
 
     private static E2eStack instance;
 
     final KafkaContainer kafka;
     final PostgreSQLContainer<?> orderDb;
     final PostgreSQLContainer<?> inventoryDb;
+    final PostgreSQLContainer<?> paymentDb;
     final GenericContainer<?> orderApp;
     final GenericContainer<?> inventoryApp;
+    final GenericContainer<?> paymentApp;
 
     static synchronized E2eStack get() {
         if (instance == null) {
@@ -100,7 +103,15 @@ final class E2eStack {
                 .withNetwork(network)
                 .withNetworkAliases("inventory-db");
 
-        Startables.deepStart(List.of(kafka, orderDb, inventoryDb)).join();
+        paymentDb = new PostgreSQLContainer<>(POSTGRES_IMAGE)
+                .withDatabaseName("payment")
+                .withUsername("payment_user")
+                .withPassword(DB_PASSWORD)
+                .withNetwork(network)
+                .withNetworkAliases("payment-db");
+
+        Startables.deepStart(List.of(kafka, orderDb, inventoryDb, paymentDb))
+                .join();
 
         // Neither service creates the topic it consumes from (each declares
         // only its outbound topic), so the harness creates both up front to
@@ -139,7 +150,23 @@ final class E2eStack {
                         ".*Started InventoryServiceApplication.*\\n", 1)
                         .withStartupTimeout(Duration.ofMinutes(3)));
 
-        Startables.deepStart(List.of(orderApp, inventoryApp)).join();
+        // payment-service is a worker like inventory-service: no web server,
+        // so readiness is the Started log line plus the group barrier below.
+        paymentApp = appContainer(network, "payment-service", Map.of(
+                "PAYMENT_POSTGRES_HOST", "payment-db",
+                "PAYMENT_POSTGRES_PORT", "5432",
+                "PAYMENT_POSTGRES_DB", "payment",
+                "PAYMENT_POSTGRES_USER", "payment_user",
+                "PAYMENT_POSTGRES_PASSWORD", DB_PASSWORD,
+                "KAFKA_BOOTSTRAP_SERVERS", INTERNAL_BOOTSTRAP,
+                "APP_OUTBOX_PUBLISH_INTERVAL_MS", "100"
+        ))
+                .waitingFor(Wait.forLogMessage(
+                        ".*Started PaymentServiceApplication.*\\n", 1)
+                        .withStartupTimeout(Duration.ofMinutes(3)));
+
+        Startables.deepStart(List.of(orderApp, inventoryApp, paymentApp))
+                .join();
 
         awaitConsumerGroupsAssigned();
     }
@@ -233,7 +260,7 @@ final class E2eStack {
     }
 
     /**
-     * Best-effort barrier: wait until both services' consumer groups have a
+     * Best-effort barrier: wait until every service's consumer group has a
      * member with a partition assignment, so the first test doesn't spend its
      * budget on the initial rebalance. Correctness does not depend on it (both
      * consumers run with earliest offset reset against a per-run broker, so
@@ -246,7 +273,8 @@ final class E2eStack {
         try (Admin admin = Admin.create(adminProperties())) {
             while (System.currentTimeMillis() < deadline) {
                 if (groupAssigned(admin, ORDER_GROUP)
-                        && groupAssigned(admin, INVENTORY_GROUP)) {
+                        && groupAssigned(admin, INVENTORY_GROUP)
+                        && groupAssigned(admin, PAYMENT_GROUP)) {
                     return;
                 }
             }
