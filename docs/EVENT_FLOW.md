@@ -10,11 +10,23 @@ For the bigger picture see [ARCHITECTURE.md](ARCHITECTURE.md).
 |---|---|---|---|---|
 | `order.events` | order-service `OutboxPublisher` | inventory-service `OrderEventsConsumer` (group `inventory-service`) | 3 / 1 | order id |
 | `inventory.events` | inventory-service `OutboxPublisher` | order-service `InventoryEventsConsumer` (group `order-service`) | 3 / 1 | order id |
+| `payment.events` | *(planned payment-service — not in this repository yet)* | order-service `PaymentEventsConsumer` (group `order-service`) | 3 / 1 | order id |
 
-Five event types flow across them today: `ORDER_CREATED`,
-`ORDER_ITEM_ADDED`, and `ORDER_CANCELLED` on `order.events`, and
-`INVENTORY_RESERVED` / `INVENTORY_RESERVATION_FAILED` on
-`inventory.events`.
+Event types today: `ORDER_CREATED`, `ORDER_ITEM_ADDED`, `ORDER_CONFIRMED`,
+and `ORDER_CANCELLED` on `order.events`; `INVENTORY_RESERVED` /
+`INVENTORY_RESERVATION_FAILED` on `inventory.events`; and
+`PAYMENT_COMPLETED` / `PAYMENT_FAILED` on `payment.events`, which
+order-service consumes but nothing in this repository produces yet.
+`ORDER_CONFIRMED` (payload: `orderId`, `customerId`, `totalAmount`,
+`currency`) is emitted in the same transaction as the `PENDING ->
+CONFIRMED` transition, which requires the client to have explicitly
+submitted the order AND every item to be reserved (whichever of the two
+completes last performs the transition) and also moves the order's
+`payment_status` to `PENDING`; `PAYMENT_COMPLETED` settles it to
+`COMPLETED`, while `PAYMENT_FAILED` moves it to `FAILED`, cancels the
+confirmed order through a dedicated payment-failure transition, and emits
+`ORDER_CANCELLED` — feeding the inventory-release compensation. The first
+terminal payment outcome wins and is never overwritten.
 
 Topic names come from configuration, not from constants in code:
 

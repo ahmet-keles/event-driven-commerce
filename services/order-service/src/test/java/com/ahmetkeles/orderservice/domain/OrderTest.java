@@ -510,4 +510,133 @@ class OrderTest {
                         UUID.randomUUID(), 1, BigDecimal.ONE, order))
         );
     }
+
+    @Test
+    void markItemReservedReportsOnlyTheConfirmingCall() {
+        Order order = new Order(UUID.randomUUID(), "USD");
+        OrderItem first = order.addItem(
+                UUID.randomUUID(), 1, new BigDecimal("10.00"));
+        OrderItem second = order.addItem(
+                UUID.randomUUID(), 1, new BigDecimal("20.00"));
+        order.submit();
+
+        assertFalse(order.markItemReserved(first.getId()),
+                "a non-final reservation must not report confirmation");
+        assertFalse(order.markItemReserved(first.getId()),
+                "a duplicate must not report confirmation");
+        assertFalse(order.markItemReserved(UUID.randomUUID()),
+                "an unknown item must not report confirmation");
+        assertTrue(order.markItemReserved(second.getId()),
+                "only the call that confirms the order reports true");
+        assertFalse(order.markItemReserved(second.getId()),
+                "a redelivery after confirmation reports false");
+    }
+
+    @Test
+    void reservationsOnAnUnsubmittedOrderNeverReportConfirmation() {
+        Order order = new Order(UUID.randomUUID(), "USD");
+        OrderItem item = order.addItem(
+                UUID.randomUUID(), 1, new BigDecimal("10.00"));
+
+        assertFalse(order.markItemReserved(item.getId()),
+                "every item is reserved, but assembly is not finished — "
+                        + "the reservation must not confirm or start payment");
+        assertEquals(OrderStatus.PENDING, order.getStatus());
+        assertEquals(PaymentStatus.NOT_STARTED, order.getPaymentStatus());
+    }
+
+    @Test
+    void confirmationViaFinalReservationStartsThePaymentLeg() {
+        Order order = new Order(UUID.randomUUID(), "USD");
+        OrderItem item = order.addItem(
+                UUID.randomUUID(), 1, new BigDecimal("10.00"));
+        order.submit();
+
+        assertEquals(PaymentStatus.NOT_STARTED, order.getPaymentStatus());
+
+        assertTrue(order.markItemReserved(item.getId()));
+
+        assertEquals(OrderStatus.CONFIRMED, order.getStatus());
+        assertEquals(PaymentStatus.PENDING, order.getPaymentStatus());
+    }
+
+    @Test
+    void confirmationViaSubmitStartsThePaymentLeg() {
+        Order order = new Order(UUID.randomUUID(), "USD");
+        OrderItem item = order.addItem(
+                UUID.randomUUID(), 1, new BigDecimal("10.00"));
+        order.markItemReserved(item.getId());
+
+        assertEquals(PaymentStatus.NOT_STARTED, order.getPaymentStatus(),
+                "reserved but unsubmitted: payment must not have started");
+
+        assertTrue(order.submit(),
+                "the submit over fully-reserved items performs the "
+                        + "confirmation");
+
+        assertEquals(OrderStatus.CONFIRMED, order.getStatus());
+        assertEquals(PaymentStatus.PENDING, order.getPaymentStatus());
+    }
+
+    @Test
+    void firstTerminalPaymentOutcomeWins() {
+        Order completed = confirmedOrder();
+        assertTrue(completed.completePayment());
+        assertFalse(completed.failPayment(),
+                "COMPLETED must never become FAILED");
+        assertFalse(completed.completePayment(),
+                "duplicate completion is a no-op");
+        assertEquals(PaymentStatus.COMPLETED, completed.getPaymentStatus());
+
+        Order failed = confirmedOrder();
+        assertTrue(failed.failPayment());
+        assertFalse(failed.completePayment(),
+                "FAILED must never resurrect to COMPLETED");
+        assertFalse(failed.failPayment(),
+                "duplicate failure is a no-op");
+        assertEquals(PaymentStatus.FAILED, failed.getPaymentStatus());
+    }
+
+    @Test
+    void paymentOutcomesRequireAStartedPayment() {
+        Order order = new Order(UUID.randomUUID(), "USD");
+
+        assertFalse(order.completePayment(),
+                "a payment that never started cannot complete");
+        assertFalse(order.failPayment(),
+                "a payment that never started cannot fail");
+        assertEquals(PaymentStatus.NOT_STARTED, order.getPaymentStatus());
+    }
+
+    @Test
+    void paymentFailureCancellationOnlyCancelsConfirmedOrders() {
+        Order confirmed = confirmedOrder();
+        assertTrue(confirmed.cancelForFailedPayment());
+        assertEquals(OrderStatus.CANCELLED, confirmed.getStatus());
+        assertFalse(confirmed.cancelForFailedPayment(),
+                "a cancelled order does not resurrect or re-cancel");
+
+        Order pending = new Order(UUID.randomUUID(), "USD");
+        assertFalse(pending.cancelForFailedPayment(),
+                "the payment-failure transition never touches a PENDING order");
+        assertEquals(OrderStatus.PENDING, pending.getStatus());
+    }
+
+    @Test
+    void genericCancelStillRefusesConfirmedOrders() {
+        Order confirmed = confirmedOrder();
+
+        assertFalse(confirmed.cancel(),
+                "generic cancellation semantics must remain unchanged");
+        assertEquals(OrderStatus.CONFIRMED, confirmed.getStatus());
+    }
+
+    private static Order confirmedOrder() {
+        Order order = new Order(UUID.randomUUID(), "USD");
+        OrderItem item = order.addItem(
+                UUID.randomUUID(), 1, new BigDecimal("10.00"));
+        order.submit();
+        order.markItemReserved(item.getId());
+        return order;
+    }
 }

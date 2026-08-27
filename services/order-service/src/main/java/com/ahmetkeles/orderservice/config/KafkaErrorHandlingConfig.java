@@ -131,6 +131,26 @@ public class KafkaErrorHandlingConfig {
     }
 
     /**
+     * Dead-letter topic for the payment events this service consumes, guarded
+     * like the inventory one.
+     */
+    @Bean
+    @ConditionalOnProperty(
+            name = "app.kafka.enabled",
+            havingValue = "true",
+            matchIfMissing = true
+    )
+    org.apache.kafka.clients.admin.NewTopic paymentEventsDeadLetterTopic(
+            @Value("${app.kafka.payment-events-topic}") String topicName
+    ) {
+        return org.springframework.kafka.config.TopicBuilder
+                .name(deadLetterTopicFor(topicName))
+                .partitions(3)
+                .replicas(1)
+                .build();
+    }
+
+    /**
      * Logs each failed delivery attempt and the eventual hand-off to the
      * dead-letter topic, so infrastructure failures stay visible without any
      * try/catch in the business consumers.
