@@ -1,6 +1,5 @@
 package com.ahmetkeles.orderservice.messaging;
 
-import com.ahmetkeles.orderservice.service.OrderService;
 import org.junit.jupiter.api.Test;
 import tools.jackson.databind.ObjectMapper;
 
@@ -10,107 +9,96 @@ import java.util.UUID;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.when;
 
 class InventoryEventsConsumerTest {
 
     private final ObjectMapper objectMapper = new ObjectMapper();
-    private final OrderService orderService = mock(OrderService.class);
+    private final InventoryEventProcessor eventProcessor =
+            mock(InventoryEventProcessor.class);
     private final InventoryEventsConsumer consumer =
-            new InventoryEventsConsumer(objectMapper, orderService);
+            new InventoryEventsConsumer(objectMapper, eventProcessor);
 
     @Test
     void processesInventoryReservedEvent() throws Exception {
+        UUID eventId = UUID.randomUUID();
         UUID orderId = UUID.randomUUID();
         UUID orderItemId = UUID.randomUUID();
         UUID productId = UUID.randomUUID();
-        String payload = objectMapper.writeValueAsString(
-                new InventoryReservedEvent(
-                        orderId, orderItemId, productId, 3)
-        );
-        String message = objectMapper.writeValueAsString(
-                new InventoryEventEnvelope(
-                        UUID.randomUUID(),
-                        "Order",
-                        orderId,
-                        "INVENTORY_RESERVED",
-                        payload,
-                        Instant.now()
-                )
-        );
+        InventoryReservedEvent event =
+                new InventoryReservedEvent(orderId, orderItemId, productId, 3);
+        when(eventProcessor.processReserved(any(), any())).thenReturn(true);
 
-        assertDoesNotThrow(() -> consumer.consume(message));
+        assertDoesNotThrow(() -> consumer.consume(
+                reservedMessage(eventId, orderId, event)
+        ));
 
-        verify(orderService).markItemReserved(orderId, orderItemId);
-        verify(orderService, never()).cancelOrder(any());
+        verify(eventProcessor).processReserved(any(), eq(event));
+        verify(eventProcessor, never())
+                .processReservationFailed(any(), any());
     }
 
     @Test
     void processesInventoryReservationFailedEvent() throws Exception {
+        UUID eventId = UUID.randomUUID();
         UUID orderId = UUID.randomUUID();
-        UUID orderItemId = UUID.randomUUID();
-        UUID productId = UUID.randomUUID();
-        String payload = objectMapper.writeValueAsString(
+        InventoryReservationFailedEvent event =
                 new InventoryReservationFailedEvent(
                         orderId,
-                        orderItemId,
-                        productId,
+                        UUID.randomUUID(),
+                        UUID.randomUUID(),
                         3,
                         "INSUFFICIENT_INVENTORY"
-                )
-        );
-        String message = objectMapper.writeValueAsString(
-                new InventoryEventEnvelope(
-                        UUID.randomUUID(),
-                        "Order",
-                        orderId,
-                        "INVENTORY_RESERVATION_FAILED",
-                        payload,
-                        Instant.now()
-                )
-        );
+                );
+        when(eventProcessor.processReservationFailed(any(), any()))
+                .thenReturn(true);
 
-        assertDoesNotThrow(() -> consumer.consume(message));
+        assertDoesNotThrow(() -> consumer.consume(
+                failedMessage(eventId, orderId, event)
+        ));
 
-        verify(orderService).cancelOrder(orderId);
-        verify(orderService, never()).markItemReserved(any(), any());
+        verify(eventProcessor).processReservationFailed(any(), eq(event));
+        verify(eventProcessor, never()).processReserved(any(), any());
     }
 
     @Test
     void processesUnknownInventoryItemFailureEvent() throws Exception {
         UUID orderId = UUID.randomUUID();
-        UUID orderItemId = UUID.randomUUID();
-        UUID productId = UUID.randomUUID();
-        String payload = objectMapper.writeValueAsString(
+        InventoryReservationFailedEvent event =
                 new InventoryReservationFailedEvent(
                         orderId,
-                        orderItemId,
-                        productId,
+                        UUID.randomUUID(),
+                        UUID.randomUUID(),
                         3,
                         "INVENTORY_ITEM_NOT_FOUND"
-                )
-        );
-        String message = objectMapper.writeValueAsString(
-                new InventoryEventEnvelope(
-                        UUID.randomUUID(),
-                        "Order",
-                        orderId,
-                        "INVENTORY_RESERVATION_FAILED",
-                        payload,
-                        Instant.now()
-                )
-        );
+                );
 
-        assertDoesNotThrow(() -> consumer.consume(message));
+        assertDoesNotThrow(() -> consumer.consume(
+                failedMessage(UUID.randomUUID(), orderId, event)
+        ));
 
-        verify(orderService).cancelOrder(orderId);
+        verify(eventProcessor).processReservationFailed(any(), eq(event));
     }
 
     @Test
-    void ignoresOtherInventoryEventTypes() throws Exception {
+    void duplicateDeliveryIsSkippedWithoutError() throws Exception {
+        UUID orderId = UUID.randomUUID();
+        InventoryReservedEvent event = new InventoryReservedEvent(
+                orderId, UUID.randomUUID(), UUID.randomUUID(), 1);
+        when(eventProcessor.processReserved(any(), any())).thenReturn(false);
+
+        assertDoesNotThrow(() -> consumer.consume(
+                reservedMessage(UUID.randomUUID(), orderId, event)
+        ));
+    }
+
+    @Test
+    void ignoresOtherInventoryEventTypesWithoutProcessing() throws Exception {
         String message = objectMapper.writeValueAsString(
                 new InventoryEventEnvelope(
                         UUID.randomUUID(),
@@ -124,7 +112,7 @@ class InventoryEventsConsumerTest {
 
         assertDoesNotThrow(() -> consumer.consume(message));
 
-        verifyNoInteractions(orderService);
+        verifyNoInteractions(eventProcessor);
     }
 
     @Test
@@ -134,6 +122,116 @@ class InventoryEventsConsumerTest {
                 () -> consumer.consume("not-json")
         );
 
-        verifyNoInteractions(orderService);
+        verifyNoInteractions(eventProcessor);
+    }
+
+    @Test
+    void rejectsMissingEventId() throws Exception {
+        UUID orderId = UUID.randomUUID();
+        InventoryReservedEvent event = new InventoryReservedEvent(
+                orderId, UUID.randomUUID(), UUID.randomUUID(), 1);
+
+        assertThrows(
+                InvalidEventException.class,
+                () -> consumer.consume(reservedMessage(null, orderId, event))
+        );
+
+        verifyNoInteractions(eventProcessor);
+    }
+
+    @Test
+    void rejectsAggregateIdMismatchedWithPayloadOrderId() throws Exception {
+        InventoryReservedEvent event = new InventoryReservedEvent(
+                UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID(), 1);
+
+        assertThrows(
+                InvalidEventException.class,
+                () -> consumer.consume(reservedMessage(
+                        UUID.randomUUID(), UUID.randomUUID(), event
+                ))
+        );
+
+        verifyNoInteractions(eventProcessor);
+    }
+
+    @Test
+    void rejectsMissingPayloadOrderId() throws Exception {
+        InventoryReservationFailedEvent event =
+                new InventoryReservationFailedEvent(
+                        null,
+                        UUID.randomUUID(),
+                        UUID.randomUUID(),
+                        1,
+                        "INSUFFICIENT_INVENTORY"
+                );
+
+        assertThrows(
+                InvalidEventException.class,
+                () -> consumer.consume(failedMessage(
+                        UUID.randomUUID(), UUID.randomUUID(), event
+                ))
+        );
+
+        verifyNoInteractions(eventProcessor);
+    }
+
+    @Test
+    void rejectsReservedEventMissingOrderItemId() throws Exception {
+        UUID orderId = UUID.randomUUID();
+        InventoryReservedEvent event = new InventoryReservedEvent(
+                orderId, null, UUID.randomUUID(), 1);
+
+        assertThrows(
+                InvalidEventException.class,
+                () -> consumer.consume(reservedMessage(
+                        UUID.randomUUID(), orderId, event
+                ))
+        );
+
+        verifyNoInteractions(eventProcessor);
+    }
+
+    private String reservedMessage(
+            UUID eventId,
+            UUID aggregateId,
+            InventoryReservedEvent event
+    ) throws Exception {
+        return envelope(
+                eventId,
+                aggregateId,
+                "INVENTORY_RESERVED",
+                objectMapper.writeValueAsString(event)
+        );
+    }
+
+    private String failedMessage(
+            UUID eventId,
+            UUID aggregateId,
+            InventoryReservationFailedEvent event
+    ) throws Exception {
+        return envelope(
+                eventId,
+                aggregateId,
+                "INVENTORY_RESERVATION_FAILED",
+                objectMapper.writeValueAsString(event)
+        );
+    }
+
+    private String envelope(
+            UUID eventId,
+            UUID aggregateId,
+            String eventType,
+            String payload
+    ) throws Exception {
+        return objectMapper.writeValueAsString(
+                new InventoryEventEnvelope(
+                        eventId,
+                        "Order",
+                        aggregateId,
+                        eventType,
+                        payload,
+                        Instant.now()
+                )
+        );
     }
 }
