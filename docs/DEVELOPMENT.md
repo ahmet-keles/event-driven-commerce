@@ -139,19 +139,31 @@ curl http://localhost:8080/actuator/health
 Exercise the API:
 
 ```bash
-# create an order
+# 1. create an order
 curl -s -X POST http://localhost:8080/api/orders \
   -H 'Content-Type: application/json' \
   -d '{"customerId":"11111111-1111-1111-1111-111111111111","currency":"USD"}'
 
-# add an item (drives the inventory reservation flow)
+# 2. add an item (drives the inventory reservation flow)
 curl -s -X POST http://localhost:8080/api/orders/<ORDER_ID>/items \
   -H 'Content-Type: application/json' \
   -d '{"productId":"22222222-2222-2222-2222-222222222222","quantity":2,"unitPrice":9.99}'
 
-# read it back — CONFIRMED once inventory reserves, CANCELLED if it cannot
+# 3. submit the order — assembly is finished, no more items coming
+curl -s -X POST http://localhost:8080/api/orders/<ORDER_ID>/submit
+
+# 4. read the final state
 curl -s http://localhost:8080/api/orders/<ORDER_ID>
 ```
+
+An order is confirmed only once it has been **submitted and every item is
+reserved** — inventory reservation alone never confirms it; whichever of the
+two happens last performs the transition. Confirmation then publishes
+`ORDER_CONFIRMED` and starts the payment leg, so the state you read back
+settles as CONFIRMED with `paymentStatus` COMPLETED (charge approved),
+CANCELLED with `paymentStatus` FAILED (charge declined — the compensation
+also releases the reserved stock), or CANCELLED if inventory could not be
+reserved at all.
 
 ## 4. Run inventory-service
 
