@@ -198,6 +198,7 @@ class OrderApiIntegrationTest extends PostgreSQLIntegrationTest {
         assertEquals("CONFIRMED", before.getStatus().name());
         Long versionBefore = before.getVersion();
         Instant updatedAtBefore = before.getUpdatedAt();
+        BigDecimal totalBefore = before.getTotalAmount();
         long itemAddedEventsBefore = itemAddedEventCount(orderId);
 
         mockMvc.perform(post("/api/orders/{orderId}/items", orderId)
@@ -210,6 +211,7 @@ class OrderApiIntegrationTest extends PostgreSQLIntegrationTest {
         assertEquals("CONFIRMED", after.getStatus().name());
         assertEquals(versionBefore, after.getVersion());
         assertEquals(updatedAtBefore, after.getUpdatedAt());
+        assertEquals(0, totalBefore.compareTo(after.getTotalAmount()));
         assertEquals(1, after.getItems().size());
         assertEquals(itemAddedEventsBefore, itemAddedEventCount(orderId));
     }
