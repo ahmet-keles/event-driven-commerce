@@ -1,0 +1,8 @@
+{
+  "eventId": "2b3c4d5e-6f70-8192-a3b4-c5d6e7f8091a",
+  "aggregateType": "Order",
+  "aggregateId": "9b1c2d3e-4f50-6172-8394-a5b6c7d8e9f0",
+  "eventType": "INVENTORY_RESERVED",
+  "payload": "{\"orderId\":\"9b1c2d3e-4f50-6172-8394-a5b6c7d8e9f0\",\"orderItemId\":\"7c8d9e0f-1a2b-3c4d-5e6f-708192a3b4c5\",\"productId\":\"11111111-2222-3333-4444-555555555555\",\"quantity\":3}",
+  "occurredAt": "2026-01-01T12:00:02Z"
+}
