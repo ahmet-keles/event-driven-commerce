@@ -13,6 +13,7 @@ import java.util.concurrent.CompletableFuture;
 
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.mockito.ArgumentMatchers.anyCollection;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.*;
@@ -26,8 +27,9 @@ import static org.mockito.Mockito.*;
  */
 class InventoryOutboxPublisherTest {
 
-    private static final int BATCH_SIZE = 100;
-    private static final long SEND_TIMEOUT_MS = 10_000;
+    private static final int BATCH_SIZE = 25;
+    private static final long SEND_TIMEOUT_MS = 2_000;
+    private static final long POLL_DEADLINE_MS = 4_000;
 
     private OutboxPublisher publisher(
             OutboxEventRepository repository,
@@ -39,7 +41,8 @@ class InventoryOutboxPublisherTest {
                 new ObjectMapper(),
                 "inventory.events",
                 BATCH_SIZE,
-                SEND_TIMEOUT_MS
+                SEND_TIMEOUT_MS,
+                POLL_DEADLINE_MS
         );
     }
 
@@ -52,6 +55,21 @@ class InventoryOutboxPublisherTest {
         );
     }
 
+    /**
+     * Stubs the claim and the cross-replica ordering guard as if this replica
+     * holds every aggregate's oldest pending event — the single-replica case.
+     */
+    private void stubClaim(
+            OutboxEventRepository repository,
+            List<OutboxEvent> events
+    ) {
+        when(repository.lockPendingEvents(anyInt()))
+                .thenReturn(events);
+
+        when(repository.findOldestPendingEventIds(anyCollection()))
+                .thenReturn(events.stream().map(OutboxEvent::getId).toList());
+    }
+
     @Test
     void successfulPublishMarksEventPublished() {
         OutboxEventRepository repository =
@@ -61,9 +79,7 @@ class InventoryOutboxPublisherTest {
                 mock(KafkaTemplate.class);
 
         OutboxEvent event = event(UUID.randomUUID(), "INVENTORY_RESERVED");
-
-        when(repository.lockPendingEvents(anyInt()))
-                .thenReturn(List.of(event));
+        stubClaim(repository, List.of(event));
 
         when(kafkaTemplate.send(
                 anyString(),
@@ -93,9 +109,7 @@ class InventoryOutboxPublisherTest {
                 mock(KafkaTemplate.class);
 
         OutboxEvent event = event(UUID.randomUUID(), "INVENTORY_RESERVED");
-
-        when(repository.lockPendingEvents(anyInt()))
-                .thenReturn(List.of(event));
+        stubClaim(repository, List.of(event));
 
         when(kafkaTemplate.send(
                 anyString(),
@@ -123,10 +137,8 @@ class InventoryOutboxPublisherTest {
 
         UUID aggregateId = UUID.randomUUID();
         OutboxEvent first = event(aggregateId, "INVENTORY_RESERVED");
-        OutboxEvent second = event(aggregateId, "INVENTORY_RESERVED");
-
-        when(repository.lockPendingEvents(anyInt()))
-                .thenReturn(List.of(first, second));
+        OutboxEvent second = event(aggregateId, "INVENTORY_RESERVATION_FAILED");
+        stubClaim(repository, List.of(first, second));
 
         when(kafkaTemplate.send(
                 anyString(),
@@ -134,7 +146,7 @@ class InventoryOutboxPublisherTest {
                 anyString()
         )).thenReturn(
                 CompletableFuture.failedFuture(
-                        new RuntimeException("Kafka unavailable")
+                        new RuntimeException("Kafka rejected this record")
                 )
         );
 
@@ -144,7 +156,9 @@ class InventoryOutboxPublisherTest {
         assertNull(second.getPublishedAt());
 
         // The second event must not even be attempted: sending it after the
-        // first one failed would reorder this aggregate's stream.
+        // first one failed would reorder this aggregate's stream — and for
+        // RESERVED/RESERVATION_FAILED that reorder flips the order's terminal
+        // state on the consuming side.
         verify(kafkaTemplate, times(1))
                 .send(anyString(), anyString(), anyString());
     }
@@ -162,9 +176,7 @@ class InventoryOutboxPublisherTest {
 
         OutboxEvent failing = event(failingAggregate, "INVENTORY_RESERVED");
         OutboxEvent healthy = event(healthyAggregate, "INVENTORY_RESERVED");
-
-        when(repository.lockPendingEvents(anyInt()))
-                .thenReturn(List.of(failing, healthy));
+        stubClaim(repository, List.of(failing, healthy));
 
         when(kafkaTemplate.send(
                 anyString(),
@@ -186,5 +198,33 @@ class InventoryOutboxPublisherTest {
 
         assertNull(failing.getPublishedAt());
         assertNotNull(healthy.getPublishedAt());
+    }
+
+    @Test
+    void aggregateWhoseOldestEventIsHeldElsewhereIsDeferred() {
+        OutboxEventRepository repository =
+                mock(OutboxEventRepository.class);
+
+        KafkaTemplate<String, String> kafkaTemplate =
+                mock(KafkaTemplate.class);
+
+        UUID contestedAggregate = UUID.randomUUID();
+        UUID unclaimedOlderEventId = UUID.randomUUID();
+
+        OutboxEvent laterEvent =
+                event(contestedAggregate, "INVENTORY_RESERVATION_FAILED");
+
+        when(repository.lockPendingEvents(anyInt()))
+                .thenReturn(List.of(laterEvent));
+
+        // The ordering guard reports an older pending event this replica does
+        // not hold — another replica has it claimed right now.
+        when(repository.findOldestPendingEventIds(anyCollection()))
+                .thenReturn(List.of(unclaimedOlderEventId));
+
+        publisher(repository, kafkaTemplate).publishPendingEvents();
+
+        assertNull(laterEvent.getPublishedAt());
+        verifyNoInteractions(kafkaTemplate);
     }
 }

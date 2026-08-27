@@ -4,6 +4,7 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
+import java.util.Collection;
 import java.util.List;
 import java.util.UUID;
 
@@ -44,4 +45,35 @@ public interface OutboxEventRepository
             nativeQuery = true
     )
     List<OutboxEvent> lockPendingEvents(@Param("batchSize") int batchSize);
+
+    /**
+     * Returns, for each of the given aggregates, the id of its oldest
+     * unpublished event.
+     *
+     * <p>This is the cross-replica ordering guard. A batch claimed with
+     * {@code SKIP LOCKED} can hold a later event of an aggregate whose earlier
+     * event is currently locked by another replica; publishing it would invert
+     * the aggregate's stream. Comparing each claimed aggregate's first event
+     * against this result inside the same transaction detects that case: only
+     * the replica holding the aggregate's oldest pending event may publish it,
+     * everyone else defers the aggregate to a later poll.
+     *
+     * <p>Runs under READ COMMITTED, so a row another replica already committed
+     * as published is correctly invisible here, and a row it failed or is
+     * still publishing still counts as pending. Both outcomes make this guard
+     * conservative: it can only defer needlessly, never publish early.
+     */
+    @Query(
+            value = """
+                    SELECT DISTINCT ON (aggregate_id) id
+                    FROM outbox_events
+                    WHERE published_at IS NULL
+                      AND aggregate_id IN (:aggregateIds)
+                    ORDER BY aggregate_id, occurred_at ASC, id ASC
+                    """,
+            nativeQuery = true
+    )
+    List<UUID> findOldestPendingEventIds(
+            @Param("aggregateIds") Collection<UUID> aggregateIds
+    );
 }

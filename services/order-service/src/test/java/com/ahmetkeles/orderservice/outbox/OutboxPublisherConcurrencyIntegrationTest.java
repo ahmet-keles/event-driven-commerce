@@ -12,6 +12,7 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.testcontainers.containers.PostgreSQLContainer;
+import tools.jackson.databind.ObjectMapper;
 
 import java.time.Instant;
 import java.time.OffsetDateTime;
@@ -102,14 +103,19 @@ class OutboxPublisherConcurrencyIntegrationTest {
     private final ConcurrentLinkedQueue<String> sentKeys =
             new ConcurrentLinkedQueue<>();
 
+    private final ConcurrentLinkedQueue<String> sentMessages =
+            new ConcurrentLinkedQueue<>();
+
     @BeforeEach
     void resetState() {
         outboxEventRepository.deleteAll();
         sentKeys.clear();
+        sentMessages.clear();
 
         when(kafkaTemplate.send(anyString(), anyString(), anyString()))
                 .thenAnswer(invocation -> {
                     sentKeys.add(invocation.getArgument(1));
+                    sentMessages.add(invocation.getArgument(2));
                     return CompletableFuture.completedFuture(null);
                 });
     }
@@ -315,6 +321,119 @@ class OutboxPublisherConcurrencyIntegrationTest {
         assertEquals(2, sentKeys.size(), "the retry is the accepted duplicate");
         assertEquals(1, Set.copyOf(sentKeys).size(), "both sends are the same event");
         assertNotNull(publishedAt(id));
+    }
+
+    // ---------- cross-replica ordering guard ----------
+
+    @Test
+    void aggregateWithOlderEventLockedElsewhereIsDeferred() throws Exception {
+        UUID aggregateId = UUID.randomUUID();
+        Instant base = Instant.parse("2026-01-01T00:00:00Z");
+
+        UUID earlier = insertPending(aggregateId, base);
+        UUID later = insertPending(aggregateId, base.plusSeconds(10));
+
+        CountDownLatch claimedEarlier = new CountDownLatch(1);
+        CountDownLatch releaseEarlier = new CountDownLatch(1);
+
+        ExecutorService worker = Executors.newSingleThreadExecutor();
+
+        try {
+            Future<List<UUID>> otherReplica = worker.submit(() ->
+                    inTransaction(() -> {
+                        // Oldest pending row first, so this claims `earlier`.
+                        List<UUID> claimed = claim(1);
+                        claimedEarlier.countDown();
+                        awaitQuietly(releaseEarlier);
+                        return claimed;
+                    }));
+
+            assertTrue(
+                    claimedEarlier.await(30, TimeUnit.SECONDS),
+                    "the other replica never claimed the earlier event"
+            );
+
+            publisher.publishPendingEvents();
+
+            assertTrue(
+                    sentKeys.isEmpty(),
+                    "the later event must not overtake the earlier one held by another replica"
+            );
+            assertNull(publishedAt(later));
+
+            releaseEarlier.countDown();
+            assertEquals(
+                    List.of(earlier),
+                    otherReplica.get(30, TimeUnit.SECONDS)
+            );
+        } finally {
+            releaseEarlier.countDown();
+            worker.shutdownNow();
+        }
+
+        // The other replica released without publishing. This publisher now
+        // holds the whole aggregate and must emit it in order.
+        publisher.publishPendingEvents();
+
+        List<String> messages = List.copyOf(sentMessages);
+
+        assertEquals(2, messages.size());
+        assertTrue(messages.get(0).contains(earlier.toString()));
+        assertTrue(messages.get(1).contains(later.toString()));
+        assertNotNull(publishedAt(earlier));
+        assertNotNull(publishedAt(later));
+    }
+
+    // ---------- bounded lock hold ----------
+
+    @Test
+    void sendTimeoutAbortsTheRestOfThePoll() {
+        insertPending(3);
+
+        // Futures that never complete: the broker is degraded, every send
+        // would burn the full local timeout.
+        doAnswer(invocation -> {
+            sentKeys.add(invocation.getArgument(1));
+            return new CompletableFuture<String>();
+        }).when(kafkaTemplate).send(anyString(), anyString(), anyString());
+
+        publisher.publishPendingEvents();
+
+        assertEquals(
+                1,
+                sentKeys.size(),
+                "after one local timeout the poll must stop, not spend a timeout per remaining row"
+        );
+
+        // Nothing was published and everything is claimable again.
+        assertEquals(3, inTransaction(() -> claim(10)).size());
+    }
+
+    @Test
+    void pollDeadlineStopsSendingButKeepsRowsClaimable() {
+        insertPending(3);
+
+        // A deadline of zero expires before the first send; the claimed rows
+        // must simply return to the pool at commit.
+        OutboxPublisher zeroDeadlinePublisher = new OutboxPublisher(
+                outboxEventRepository,
+                kafkaTemplate,
+                new ObjectMapper(),
+                "order.events",
+                25,
+                250,
+                0
+        );
+
+        // A manual instance has no @Transactional proxy, so supply the
+        // transaction the claim query requires.
+        inTransaction(() -> {
+            zeroDeadlinePublisher.publishPendingEvents();
+            return null;
+        });
+
+        assertTrue(sentKeys.isEmpty(), "no send may start after the deadline");
+        assertEquals(3, inTransaction(() -> claim(10)).size());
     }
 
     // ---------- ordering ----------

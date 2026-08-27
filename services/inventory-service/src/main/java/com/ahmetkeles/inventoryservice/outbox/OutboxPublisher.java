@@ -11,10 +11,13 @@ import org.springframework.transaction.annotation.Transactional;
 import tools.jackson.databind.ObjectMapper;
 
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 /**
  * Polls the transactional outbox and relays pending events to Kafka.
@@ -26,6 +29,24 @@ import java.util.concurrent.TimeUnit;
  * themselves instead of racing for the same rows. Locks are released by commit,
  * rollback, or connection loss, so a replica that dies mid-batch hands its
  * unpublished rows straight back to the next poller.
+ *
+ * <h2>Bounded lock hold</h2>
+ * The claim transaction pins row locks and one pooled connection, so its
+ * duration is capped three ways rather than left to batch arithmetic:
+ * <ul>
+ *   <li>{@code app.outbox.poll-deadline-ms}: no new send starts after the
+ *       deadline; whatever was not reached stays pending for the next poll;</li>
+ *   <li>a send that times out locally aborts the rest of the poll — a local
+ *       timeout means the broker is degraded, and giving the remaining rows
+ *       their own timeouts would multiply the hold for no benefit;</li>
+ *   <li>{@code max.block.ms} is configured down so a metadata stall inside
+ *       {@code send()} cannot pin the transaction for the producer default of
+ *       60 seconds.</li>
+ * </ul>
+ * Worst case is therefore {@code poll-deadline + max.block + send-timeout} —
+ * independent of batch size — and with the shipped defaults comes to
+ * 4s + 2s + 2s = 8 seconds, on exactly one connection per replica (the
+ * scheduler is single-threaded and {@code fixedDelay} prevents overlap).
  *
  * <h2>Delivery semantics: at-least-once, not exactly-once</h2>
  * {@code published_at} is only ever set after the broker has acknowledged the
@@ -43,16 +64,21 @@ import java.util.concurrent.TimeUnit;
  * Consumers must therefore deduplicate on the envelope's {@code eventId}.
  *
  * <h2>Ordering</h2>
- * Within one claimed batch, a failed send blocks the rest of that aggregate's
- * events for the remainder of the poll, so a single publisher never emits an
- * aggregate's events out of order or with a gap. Other aggregates continue, so
- * one poisonous row cannot stall the whole outbox.
+ * Per-aggregate order is preserved, including across replicas. Within a batch,
+ * a failed send blocks the rest of that aggregate's events for the remainder
+ * of the poll, so this publisher never emits an aggregate's events out of
+ * order or with a gap; other aggregates continue, so one poisonous row cannot
+ * stall the whole outbox. Across replicas, an aggregate is only published by
+ * the replica whose claim holds that aggregate's oldest pending event (checked
+ * against {@link OutboxEventRepository#findOldestPendingEventIds} inside the
+ * claim transaction); a replica holding only a later event defers the
+ * aggregate to a later poll instead of publishing it early.
  *
- * <p>This guarantee is per publisher instance. Across replicas it does not
- * hold: two replicas can claim different events for the same aggregate in the
- * same instant and send them in either order. Strict per-aggregate ordering
- * under scale-out needs the outbox partitioned by aggregate, which this class
- * deliberately does not attempt.
+ * <p>That guard exists because the consumers are not reorder-tolerant: both
+ * reservation outcomes ({@code INVENTORY_RESERVED} and
+ * {@code INVENTORY_RESERVATION_FAILED}) key on the same orderId and drive
+ * first-writer-wins transitions out of {@code PENDING}, so inverting them
+ * would flip an order's terminal state.
  */
 @Component
 @ConditionalOnProperty(
@@ -65,20 +91,28 @@ public class OutboxPublisher {
     private static final Logger log =
             LoggerFactory.getLogger(OutboxPublisher.class);
 
+    private enum SendOutcome {
+        PUBLISHED,
+        FAILED,
+        TIMED_OUT
+    }
+
     private final OutboxEventRepository outboxEventRepository;
     private final KafkaTemplate<String, String> kafkaTemplate;
     private final ObjectMapper objectMapper;
     private final String topicName;
     private final int batchSize;
     private final long sendTimeoutMs;
+    private final long pollDeadlineMs;
 
     public OutboxPublisher(
             OutboxEventRepository outboxEventRepository,
             KafkaTemplate<String, String> kafkaTemplate,
             ObjectMapper objectMapper,
             @Value("${app.kafka.inventory-events-topic}") String topicName,
-            @Value("${app.outbox.batch-size:100}") int batchSize,
-            @Value("${app.outbox.send-timeout-ms:10000}") long sendTimeoutMs
+            @Value("${app.outbox.batch-size:25}") int batchSize,
+            @Value("${app.outbox.send-timeout-ms:2000}") long sendTimeoutMs,
+            @Value("${app.outbox.poll-deadline-ms:4000}") long pollDeadlineMs
     ) {
         this.outboxEventRepository = outboxEventRepository;
         this.kafkaTemplate = kafkaTemplate;
@@ -86,16 +120,9 @@ public class OutboxPublisher {
         this.topicName = topicName;
         this.batchSize = batchSize;
         this.sendTimeoutMs = sendTimeoutMs;
+        this.pollDeadlineMs = pollDeadlineMs;
     }
 
-    /**
-     * Claims and relays one batch of pending events.
-     *
-     * <p>The transaction spans the whole batch because the row locks it holds
-     * are what keep other replicas off these rows. Worst-case lock hold is
-     * therefore {@code batch-size × send-timeout-ms}; both are tunable so the
-     * bound can be brought down where the broker is slow or replicas are many.
-     */
     @Scheduled(
             fixedDelayString = "${app.outbox.publish-interval-ms:1000}"
     )
@@ -104,28 +131,87 @@ public class OutboxPublisher {
         List<OutboxEvent> events =
                 outboxEventRepository.lockPendingEvents(batchSize);
 
-        Set<UUID> blockedAggregates = new HashSet<>();
+        if (events.isEmpty()) {
+            return;
+        }
+
+        Set<UUID> blockedAggregates = deferAggregatesClaimedElsewhere(events);
+
+        long deadlineNanos =
+                System.nanoTime()
+                        + TimeUnit.MILLISECONDS.toNanos(pollDeadlineMs);
 
         for (OutboxEvent event : events) {
             UUID aggregateId = event.getAggregateId();
 
-            // An earlier event for this aggregate failed. Publishing this one
-            // now would reorder the aggregate's stream, so leave it pending.
+            // An earlier event for this aggregate failed here or is held by
+            // another replica. Publishing this one now would reorder the
+            // aggregate's stream, so leave it pending.
             if (blockedAggregates.contains(aggregateId)) {
                 continue;
             }
 
-            if (!publish(event)) {
+            if (System.nanoTime() >= deadlineNanos) {
+                log.info(
+                        "Outbox poll deadline of {} ms reached; leaving remaining claimed events for the next poll.",
+                        pollDeadlineMs
+                );
+                break;
+            }
+
+            SendOutcome outcome = publish(event);
+
+            if (outcome == SendOutcome.FAILED) {
                 blockedAggregates.add(aggregateId);
+            }
+
+            if (outcome == SendOutcome.TIMED_OUT) {
+                // A local timeout means the broker is degraded, not that this
+                // record is bad. Burning a timeout per remaining row would
+                // multiply the lock hold for nothing; retry everything on the
+                // next poll instead.
+                break;
             }
         }
     }
 
     /**
-     * @return {@code true} when the broker acknowledged the event and the row
-     *         was marked published, {@code false} when it must stay pending.
+     * Cross-replica ordering guard: an aggregate may only be published by the
+     * replica whose claim holds its oldest pending event. The claim takes the
+     * globally oldest unlocked rows first, so holding a later event of an
+     * aggregate without its earlier one can only mean another replica has the
+     * earlier one in flight — defer the aggregate rather than overtake it.
      */
-    private boolean publish(OutboxEvent event) {
+    private Set<UUID> deferAggregatesClaimedElsewhere(
+            List<OutboxEvent> events
+    ) {
+        Map<UUID, UUID> firstClaimedPerAggregate = new LinkedHashMap<>();
+
+        for (OutboxEvent event : events) {
+            firstClaimedPerAggregate.putIfAbsent(
+                    event.getAggregateId(),
+                    event.getId()
+            );
+        }
+
+        Set<UUID> oldestPendingIds = new HashSet<>(
+                outboxEventRepository.findOldestPendingEventIds(
+                        firstClaimedPerAggregate.keySet()
+                )
+        );
+
+        Set<UUID> deferred = new HashSet<>();
+
+        firstClaimedPerAggregate.forEach((aggregateId, firstClaimedId) -> {
+            if (!oldestPendingIds.contains(firstClaimedId)) {
+                deferred.add(aggregateId);
+            }
+        });
+
+        return deferred;
+    }
+
+    private SendOutcome publish(OutboxEvent event) {
         try {
             String message = objectMapper.writeValueAsString(
                     PublishedOutboxEvent.from(event)
@@ -141,7 +227,16 @@ public class OutboxPublisher {
             event.markPublished();
             outboxEventRepository.save(event);
 
-            return true;
+            return SendOutcome.PUBLISHED;
+        } catch (TimeoutException exception) {
+            log.error(
+                    "Timed out after {} ms publishing inventory outbox event {} for aggregate {}. Event remains unpublished for retry.",
+                    sendTimeoutMs,
+                    event.getId(),
+                    event.getAggregateId()
+            );
+
+            return SendOutcome.TIMED_OUT;
         } catch (InterruptedException exception) {
             Thread.currentThread().interrupt();
 
@@ -151,7 +246,7 @@ public class OutboxPublisher {
                     event.getAggregateId()
             );
 
-            return false;
+            return SendOutcome.TIMED_OUT;
         } catch (Exception exception) {
             log.error(
                     "Failed to publish inventory outbox event {} for aggregate {}. Event remains unpublished for retry.",
@@ -160,7 +255,7 @@ public class OutboxPublisher {
                     exception
             );
 
-            return false;
+            return SendOutcome.FAILED;
         }
     }
 }
