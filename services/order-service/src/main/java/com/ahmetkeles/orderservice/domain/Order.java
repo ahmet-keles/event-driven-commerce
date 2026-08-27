@@ -69,7 +69,17 @@ public class Order {
         this.updatedAt = Instant.now();
     }
 
+    /**
+     * Adds an item to the order. Items can only be added while the order is
+     * still {@code PENDING}: a terminal order rejects the call before any
+     * state is touched, so items, total, {@code updatedAt} and the version
+     * all stay exactly as they were.
+     */
     public OrderItem addItem(UUID productId, int quantity, BigDecimal unitPrice) {
+        if (status != OrderStatus.PENDING) {
+            throw new OrderNotModifiableException(id, status);
+        }
+
         OrderItem item = new OrderItem(productId, quantity, unitPrice, this);
 
         items.add(item);

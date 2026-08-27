@@ -285,6 +285,60 @@ class OrderTest {
     }
 
     @Test
+    void addItemOnConfirmedOrderIsRejectedWithoutMutation() {
+        Order order = new Order(UUID.randomUUID(), "USD");
+        OrderItem item = order.addItem(
+                UUID.randomUUID(), 2, new BigDecimal("15.00"));
+        order.markItemReserved(item.getId());
+
+        BigDecimal totalBefore = order.getTotalAmount();
+        Instant updatedAtBefore = order.getUpdatedAt();
+
+        assertThrows(
+                OrderNotModifiableException.class,
+                () -> order.addItem(
+                        UUID.randomUUID(), 1, new BigDecimal("5.00"))
+        );
+
+        assertEquals(OrderStatus.CONFIRMED, order.getStatus());
+        assertEquals(1, order.getItems().size());
+        assertEquals(totalBefore, order.getTotalAmount());
+        assertEquals(updatedAtBefore, order.getUpdatedAt());
+    }
+
+    @Test
+    void addItemOnCancelledOrderIsRejectedWithoutMutation() {
+        Order order = new Order(UUID.randomUUID(), "USD");
+        order.addItem(UUID.randomUUID(), 2, new BigDecimal("15.00"));
+        order.cancel();
+
+        BigDecimal totalBefore = order.getTotalAmount();
+        Instant updatedAtBefore = order.getUpdatedAt();
+
+        assertThrows(
+                OrderNotModifiableException.class,
+                () -> order.addItem(
+                        UUID.randomUUID(), 1, new BigDecimal("5.00"))
+        );
+
+        assertEquals(OrderStatus.CANCELLED, order.getStatus());
+        assertEquals(1, order.getItems().size());
+        assertEquals(totalBefore, order.getTotalAmount());
+        assertEquals(updatedAtBefore, order.getUpdatedAt());
+    }
+
+    @Test
+    void addItemOnTerminalOrderRejectsEvenInvalidArguments() {
+        Order order = new Order(UUID.randomUUID(), "USD");
+        order.cancel();
+
+        assertThrows(
+                OrderNotModifiableException.class,
+                () -> order.addItem(UUID.randomUUID(), 0, null)
+        );
+    }
+
+    @Test
     void itemsCannotBeModifiedByCallers() {
         Order order = new Order(UUID.randomUUID(), "USD");
 
